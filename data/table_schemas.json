@@ -1,0 +1,61 @@
+{
+  "tables": [
+    {
+      "table_name": "students",
+      "columns": [
+        {
+          "name": "id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": true,
+          "is_unique": false
+        },
+        {
+          "name": "name",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "age",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "grade",
+          "column_type": "FLOAT",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "active",
+          "column_type": "BOOLEAN",
+          "max_length": null,
+          "nullable": true,
+          "default_value": true,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": "id",
+      "created_time": null
+    }
+  ],
+  "table_pages": {
+    "students": [
+      9
+    ]
+  }
+}
