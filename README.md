@@ -4,12 +4,12 @@
 
 # 可以改进的空间
 1. SQL语法支持扩展
-复杂查询支持
+---复杂查询支持
 JOIN操作：实现表连接（INNER JOIN, LEFT JOIN, RIGHT JOIN等）
 子查询：支持嵌套查询
 GROUP BY/HAVING：分组查询和分组过滤
 ORDER BY：排序查询
-LIMIT/OFFSET：结果集分页
+LIMIT/OFFSET：结果集分页---
 高级数据类型
 日期时间类型：DATE, TIME, DATETIME, TIMESTAMP
 二进制类型：BLOB
