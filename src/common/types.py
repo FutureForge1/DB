@@ -40,6 +40,10 @@ class TokenType(Enum):
     ASC = "ASC"
     DESC = "DESC"
     
+    # 限制
+    LIMIT = "LIMIT"
+    OFFSET = "OFFSET"
+    
     # 子查询
     IN = "IN"
     EXISTS = "EXISTS"
@@ -187,7 +191,14 @@ class ASTNodeType(Enum):
     
     # 排序节点类型
     ORDER_BY_CLAUSE = "ORDER_BY_CLAUSE"
+    ORDER_BY_LIST = "ORDER_BY_LIST"
+    ORDER_BY_SPEC = "ORDER_BY_SPEC"
     ORDER_SPEC = "ORDER_SPEC"
+    
+    # 限制节点类型
+    LIMIT_CLAUSE = "LIMIT_CLAUSE"
+    LIMIT_VALUE = "LIMIT_VALUE"
+    OFFSET_VALUE = "OFFSET_VALUE"
     
     # 子查询节点类型
     SUBQUERY = "SUBQUERY"
@@ -195,6 +206,8 @@ class ASTNodeType(Enum):
     # 表连接节点类型
     TABLE_REF = "TABLE_REF"
     TABLE_ALIAS = "TABLE_ALIAS"
+    COLUMN_REF = "COLUMN_REF"
+    AGGREGATE_ARG_LIST = "AGGREGATE_ARG_LIST"
 
 # 抽象语法树节点
 @dataclass
@@ -287,6 +300,8 @@ SQL_KEYWORDS = {
     'GROUP', 'BY', 'HAVING', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN',
     # 排序关键字
     'ORDER', 'ASC', 'DESC',
+    # 限制关键字
+    'LIMIT', 'OFFSET',
     # 子查询关键字
     'IN', 'EXISTS', 'ALL', 'ANY', 'SOME',
     # DDL关键字

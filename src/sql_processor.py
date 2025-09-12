@@ -12,6 +12,7 @@ from src.compiler.lexer.lexer import Lexer
 from src.compiler.parser.unified_parser import UnifiedSQLParser
 from src.compiler.semantic.ddl_dml_analyzer import DDLDMLSemanticAnalyzer
 from src.compiler.codegen.translator import QuadrupleTranslator
+from src.compiler.codegen.translator import IntegratedCodeGenerator
 from src.execution.execution_engine import ExecutionEngine
 from src.storage.storage_engine import StorageEngine
 
@@ -32,7 +33,8 @@ class SQLProcessor:
         self.complex_keywords = {
             'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL',
             'COUNT', 'SUM', 'AVG', 'MAX', 'MIN',
-            'GROUP', 'ORDER', 'HAVING', 'ASC', 'DESC'
+            'GROUP', 'ORDER', 'HAVING', 'ASC', 'DESC',
+            'LIMIT', 'OFFSET'
         }
     
     def _is_complex_query_from_tokens(self, tokens) -> bool:
@@ -64,6 +66,14 @@ class SQLProcessor:
                 return True
         return False
     
+    def _is_complex_query(self, sql: str) -> bool:
+        """检测是否为复杂查询"""
+        sql_upper = sql.upper()
+        for keyword in self.complex_keywords:
+            if keyword in sql_upper:
+                return True
+        return False
+    
     def process_sql(self, sql: str) -> Tuple[bool, List[Dict[str, Any]], str]:
         """
         处理SQL语句
@@ -75,6 +85,9 @@ class SQLProcessor:
             (是否成功, 结果列表, 错误信息)
         """
         try:
+            # 检测是否为复杂查询
+            is_complex = self._is_complex_query(sql)
+            
             # 1. 使用统一解析器进行词法和语法分析
             unified_parser = UnifiedSQLParser(sql)
             ast, sql_type = unified_parser.parse()
@@ -84,12 +97,9 @@ class SQLProcessor:
             
             print(f"  → 检测到{sql_type}语句")
             
-            # 2. 根据SQL类型选择语义分析器
+            # 2. 根据SQL类型和复杂性选择语义分析器
             if sql_type == "SELECT":
-                # SELECT查询使用原有的语义分析器
-                tokens = unified_parser.get_tokens()
-                is_complex = self._is_complex_query_from_tokens(tokens)
-                
+                # SELECT查询根据复杂性选择分析器
                 if is_complex:
                     from src.compiler.semantic.extended_analyzer import ExtendedSemanticAnalyzer
                     semantic_analyzer = ExtendedSemanticAnalyzer()
@@ -118,8 +128,13 @@ class SQLProcessor:
             # 3. 目标代码生成和执行
             if sql_type == "SELECT":
                 # SELECT查询需要目标代码生成和执行
-                translator = QuadrupleTranslator()
-                target_instructions = translator.translate(quadruples)
+                # 根据复杂性选择代码生成器
+                if is_complex:
+                    translator = IntegratedCodeGenerator()
+                else:
+                    translator = QuadrupleTranslator()
+                    
+                target_instructions = translator.generate_target_code(quadruples)
                 results = self.execution_engine.execute(target_instructions)
                 return True, results, ""
                 
@@ -563,33 +578,6 @@ class SQLProcessor:
             return 'STRING'
         else:
             return 'STRING'  # 默认类型
-        """
-        检测是否为复杂查询
-        
-        Args:
-            tokens: Token列表
-            
-        Returns:
-            是否为复杂查询
-        """
-        # 检查WHERE子句
-        has_where = False
-        for token in tokens:
-            if token.value.upper() == 'WHERE':
-                has_where = True
-                break
-        
-        # 如果有WHERE子句，检查是否为简单比较条件
-        if has_where:
-            # 简单启发式：WHERE column operator value 形式的条件认为是简单查询
-            # 这里我们先尝试用基础分析器处理
-            return False  # 暂时将WHERE查询视为可以由基础分析器处理
-        
-        # 检查其他复杂查询关键字
-        for token in tokens:
-            if token.value.upper() in self.complex_keywords:
-                return True
-        return False
     
     def execute_sql_with_details(self, sql: str) -> Dict[str, Any]:
         """
@@ -619,13 +607,17 @@ class SQLProcessor:
             result['tokens_count'] = len(tokens)
             
             # 检测复杂查询
-            result['is_complex'] = self._is_complex_query(tokens)
+            result['is_complex'] = self._is_complex_query(sql)
             
             # 选择分析器
             if result['is_complex']:
+                from src.compiler.parser.extended_parser import ExtendedParser
+                from src.compiler.semantic.extended_analyzer import ExtendedSemanticAnalyzer
                 parser = ExtendedParser(tokens)
                 semantic_analyzer = ExtendedSemanticAnalyzer()
             else:
+                from src.compiler.parser.parser import Parser
+                from src.compiler.semantic.analyzer import SemanticAnalyzer
                 parser = Parser(tokens)
                 semantic_analyzer = SemanticAnalyzer()
             
@@ -644,8 +636,14 @@ class SQLProcessor:
             result['quadruples_count'] = len(quadruples)
             
             # 目标代码生成
-            translator = QuadrupleTranslator()
-            target_instructions = translator.translate(quadruples)
+            if result['is_complex']:
+                from src.compiler.codegen.translator import IntegratedCodeGenerator
+                translator = IntegratedCodeGenerator()
+            else:
+                from src.compiler.codegen.translator import QuadrupleTranslator
+                translator = QuadrupleTranslator()
+                
+            target_instructions = translator.generate_target_code(quadruples)
             result['instructions_count'] = len(target_instructions)
             
             # 执行
@@ -709,17 +707,18 @@ def test_sql_processor():
         "SELECT name FROM students;", 
         "SELECT name, age FROM students;",
         
-        # 复杂查询（虽然语法分析可能失败，但能正确检测）
+        # 复杂查询
         "SELECT COUNT(*) FROM students;",
         "SELECT AVG(grade) FROM students;",
-        "SELECT name, grade FROM students ORDER BY grade DESC;"
+        "SELECT name, grade FROM students ORDER BY grade DESC;",
+        "SELECT major, COUNT(*) FROM students GROUP BY major;"
     ]
     
-    print(f"\\n开始测试 {len(test_queries)} 个SQL查询...")
+    print(f"\n开始测试 {len(test_queries)} 个SQL查询...")
     print("=" * 80)
     
     for i, sql in enumerate(test_queries, 1):
-        print(f"\\n查询 {i}: {sql}")
+        print(f"\n查询 {i}: {sql}")
         print("-" * 60)
         
         # 使用详细执行方法
@@ -740,7 +739,7 @@ def test_sql_processor():
         else:
             print(f"  ❌ 执行失败: {result['error']}")
     
-    print("\\n" + "=" * 80)
+    print("\n" + "=" * 80)
     print("处理器统计信息")
     print("=" * 80)
     
@@ -753,7 +752,7 @@ def test_sql_processor():
     # 关闭存储引擎
     storage.shutdown()
     
-    print("\\n✅ SQL处理器测试完成!")
+    print("\n✅ SQL处理器测试完成!")
 
 if __name__ == "__main__":
     test_sql_processor()

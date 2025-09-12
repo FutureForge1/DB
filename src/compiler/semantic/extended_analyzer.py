@@ -40,6 +40,17 @@ class ExtendedSemanticAnalyzer:
             'MIN': 'MIN'
         }
     
+    def _generate_temp(self) -> str:
+        """生成临时变量名"""
+        self.temp_counter += 1
+        return f"T{self.temp_counter}"
+    
+    def _emit(self, op: str, arg1: Optional[str], arg2: Optional[str], result: Optional[str]):
+        """生成四元式"""
+        quad = Quadruple(op, arg1, arg2, result)
+        self.quadruples.append(quad)
+        return quad
+    
     def analyze(self, ast: ASTNode) -> List[Quadruple]:
         """
         分析AST并生成四元式
@@ -98,11 +109,15 @@ class ExtendedSemanticAnalyzer:
         # 处理ORDER BY子句
         self._analyze_order_by_clause(node)
         
+        # 处理LIMIT/OFFSET子句
+        self._analyze_limit_clause(node)
+        
         # 处理SELECT列表（聚合函数需要在扫描表之后处理）
         select_info = self._analyze_select_list(node)
         
         # 生成最终的选择和输出操作
         result_temp = self._generate_temp()
+        # 修复：正确传递列信息到SELECT四元式
         self._emit('SELECT', select_info.get('columns', '*'), table_info.get('main_table'), result_temp)
         self._emit('OUTPUT', result_temp, None, None)
         
@@ -118,6 +133,8 @@ class ExtendedSemanticAnalyzer:
                 table_name = child.value
                 table_info['main_table'] = table_name
                 table_info['tables'].append(table_name)
+                # 设置当前表
+                self.current_table = table_name
                 
                 print(f"  主表: {table_name}")
                 
@@ -129,6 +146,9 @@ class ExtendedSemanticAnalyzer:
                     line=0,
                     column=0
                 ))
+            elif child.type == ASTNodeType.IDENTIFIER and child.value in ["INNER", "LEFT", "RIGHT", "FULL"]:
+                # 处理JOIN类型
+                print(f"  JOIN类型: {child.value}")
         
         return table_info
     
@@ -147,7 +167,15 @@ class ExtendedSemanticAnalyzer:
     def _analyze_column_list(self, node: ASTNode, select_info: Dict[str, Any]):
         """分析列列表"""
         for child in node.children:
-            if child.type == ASTNodeType.IDENTIFIER:
+            if child.type == ASTNodeType.COLUMN_REF:  # 修复：处理COLUMN_REF节点
+                # 获取列名，可能带表前缀
+                column_name = child.value
+                if isinstance(select_info['columns'], list):
+                    select_info['columns'].append(column_name)
+                else:
+                    select_info['columns'] = [column_name]
+                print(f"    选择列: {column_name}")
+            elif child.type == ASTNodeType.IDENTIFIER:
                 column_name = child.value
                 if column_name == "*":
                     select_info['columns'] = "*"
@@ -223,22 +251,39 @@ class ExtendedSemanticAnalyzer:
         """分析单个JOIN子句"""
         join_table = None
         join_condition = None
+        join_type = "INNER"  # 默认内连接
+        
+        # 查找JOIN类型 - 修复：不使用parent属性
+        # 在JOIN子句中查找JOIN类型，而不是在父节点中查找
+        # JOIN类型通常在JOIN关键字之前
+        join_type = "INNER"  # 默认值
         
         for child in node.children:
             if child.type == ASTNodeType.TABLE_NAME:
                 join_table = child.value
                 table_info['tables'].append(join_table)
-                print(f"    JOIN表: {join_table}")
+                print(f"    {join_type} JOIN表: {join_table}")
                 
             elif child.type == ASTNodeType.ON_CLAUSE:
-                join_condition = self._analyze_join_condition(child)
+                # 查找条件节点
+                for on_child in child.children:
+                    if on_child.type == ASTNodeType.CONDITION:
+                        join_condition = on_child.value
+                        break
+                
                 print(f"    ON条件: {join_condition}")
         
-        if join_table and join_condition:
+        if join_table:
             # 生成JOIN操作的四元式
             join_temp = self._generate_temp()
-            self._emit('JOIN', table_info['main_table'], join_table, join_temp)
-            self._emit('ON', join_condition['left'], join_condition['right'], join_condition['op'])
+            if join_type == "LEFT":
+                self._emit('LEFT_JOIN', table_info['main_table'], f"{join_table} ON {join_condition}", join_temp)
+            elif join_type == "RIGHT":
+                self._emit('RIGHT_JOIN', table_info['main_table'], f"{join_table} ON {join_condition}", join_temp)
+            elif join_type == "FULL":
+                self._emit('FULL_JOIN', table_info['main_table'], f"{join_table} ON {join_condition}", join_temp)
+            else:
+                self._emit('INNER_JOIN', table_info['main_table'], f"{join_table} ON {join_condition}", join_temp)
     
     def _analyze_join_condition(self, node: ASTNode) -> Dict[str, str]:
         """分析JOIN条件"""
@@ -262,7 +307,7 @@ class ExtendedSemanticAnalyzer:
         """分析条件表达式"""
         # 简化的条件分析
         condition_temp = self._generate_temp()
-        self._emit('CONDITION', 'column', '>', 'value', condition_temp)
+        self._emit('CONDITION', 'column', '>', condition_temp)
         return condition_temp
     
     def _analyze_group_by_clause(self, node: ASTNode) -> Dict[str, Any]:
@@ -283,7 +328,7 @@ class ExtendedSemanticAnalyzer:
                 # 生成GROUP BY四元式
                 if group_info['columns']:
                     group_temp = self._generate_temp()
-                    self._emit('GROUP_BY', ','.join(group_info['columns']), None, group_temp)
+                    self._emit('GROUP_BY', self.current_table, ','.join(group_info['columns']), group_temp)
         
         return group_info
     
@@ -292,9 +337,18 @@ class ExtendedSemanticAnalyzer:
         for child in node.children:
             if child.type == ASTNodeType.HAVING_CLAUSE:
                 print("  分析HAVING子句...")
-                having_temp = self._analyze_condition(child)
-                if having_temp:
-                    self._emit('HAVING', having_temp, None, None)
+                
+                # 查找条件表达式
+                condition_str = ""
+                for grandchild in child.children:
+                    if grandchild.type == ASTNodeType.CONDITION:
+                        condition_str = grandchild.value
+                        break
+                
+                if condition_str:
+                    having_temp = self._generate_temp()
+                    self._emit('HAVING', condition_str, None, having_temp)
+                    print(f"    HAVING条件: {condition_str}")
     
     def _analyze_order_by_clause(self, node: ASTNode):
         """分析ORDER BY子句"""
@@ -320,7 +374,7 @@ class ExtendedSemanticAnalyzer:
                         direction = spec.get('direction', 'ASC')
                         order_spec = f"{column} {direction}"
                         temp = self._generate_temp()
-                        self._emit('ORDER_BY', order_spec, None, temp)
+                        self._emit('ORDER_BY', self.current_table, order_spec, temp)
                         print(f"    排序: {order_spec}")
 
     def _analyze_order_list(self, node: ASTNode, order_specs: List[Dict[str, str]]):
@@ -330,10 +384,18 @@ class ExtendedSemanticAnalyzer:
                 # 分析排序规范
                 spec = {}
                 
-                # 查找列引用
+                # 查找列引用或聚合函数
                 for spec_child in child.children:
                     if spec_child.type == ASTNodeType.COLUMN_REF:
-                        spec['column'] = spec_child.value or (spec_child.children[0].value if spec_child.children else 'unknown')
+                        spec['column'] = spec_child.value
+                        spec['type'] = 'column'
+                        break
+                    elif spec_child.type == ASTNodeType.AGGREGATE_FUNCTION:
+                        # 处理聚合函数
+                        func_name = spec_child.value
+                        column_arg = self._get_aggregate_column(spec_child)
+                        spec['column'] = f"{func_name}({column_arg})"
+                        spec['type'] = 'aggregate'
                         break
                 
                 # 查找排序方向
@@ -350,16 +412,31 @@ class ExtendedSemanticAnalyzer:
                 # 递归处理排序列表的其余部分
                 self._analyze_order_list(child, order_specs)
 
-    def _emit(self, op: str, arg1: Optional[str], arg2: Optional[str], result: Optional[str]):
-        """生成四元式"""
-        quad = Quadruple(op, arg1, arg2, result)
-        self.quadruples.append(quad)
-    
-    def _generate_temp(self) -> str:
-        """生成临时变量"""
-        self.temp_counter += 1
-        return f"T{self.temp_counter}"
-    
+    def _analyze_limit_clause(self, node: ASTNode):
+        """分析LIMIT/OFFSET子句"""
+        for child in node.children:
+            if child.type == ASTNodeType.LIMIT_CLAUSE:
+                print("  分析LIMIT/OFFSET子句...")
+                
+                limit_value = None
+                offset_value = None
+                
+                # 查找LIMIT和OFFSET值
+                for grandchild in child.children:
+                    if grandchild.type == ASTNodeType.LIMIT_VALUE:
+                        limit_value = grandchild.value
+                    elif grandchild.type == ASTNodeType.OFFSET_VALUE:
+                        offset_value = grandchild.value
+                
+                # 生成LIMIT/OFFSET四元式
+                if limit_value is not None:
+                    self._emit('LIMIT', limit_value, None, None)
+                    print(f"    LIMIT: {limit_value}")
+                
+                if offset_value is not None:
+                    self._emit('OFFSET', offset_value, None, None)
+                    print(f"    OFFSET: {offset_value}")
+
     def _generate_label(self) -> str:
         """生成标签"""
         self.label_counter += 1
@@ -389,7 +466,7 @@ def test_extended_semantic_analyzer():
     print("=" * 70)
     
     for i, sql in enumerate(test_cases, 1):
-        print(f"\\n\\n测试用例 {i}: {sql}")
+        print(f"\n\n测试用例 {i}: {sql}")
         print("=" * 70)
         
         try:
@@ -407,9 +484,9 @@ def test_extended_semantic_analyzer():
                 quadruples = analyzer.analyze(ast)
                 
                 if quadruples:
-                    print(f"\\n生成四元式成功！共 {len(quadruples)} 条")
+                    print(f"\n生成四元式成功！共 {len(quadruples)} 条")
                 else:
-                    print("\\n四元式生成失败")
+                    print("\n四元式生成失败")
             else:
                 print("语法分析失败，跳过语义分析")
                 
@@ -418,7 +495,7 @@ def test_extended_semantic_analyzer():
             import traceback
             traceback.print_exc()
     
-    print("\\n✅ 扩展语义分析器测试完成!")
+    print("\n✅ 扩展语义分析器测试完成!")
 
 if __name__ == "__main__":
     test_extended_semantic_analyzer()

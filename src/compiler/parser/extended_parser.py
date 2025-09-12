@@ -157,6 +157,7 @@ class ExtendedParser:
             "group_by_clause": ["ε"],
             "having_clause": ["ε"],
             "order_by_clause": ["ε"],
+            "limit_clause": ["ε"],
             "join_list": ["ε"],
             "table_alias": ["ε"],
             "column_alias": ["ε"],
@@ -228,6 +229,11 @@ class ExtendedParser:
                     root.add_child(table_node)
                     pos += 1
                 
+                # 解析表别名（如果存在）
+                if pos < len(self.tokens) and self.tokens[pos].type == TokenType.IDENTIFIER:
+                    # 表别名
+                    pos += 1
+                
                 # 解析JOIN子句
                 pos = self._parse_joins(pos, root)
             
@@ -237,8 +243,14 @@ class ExtendedParser:
             # 解析GROUP BY子句
             pos = self._parse_group_by_clause(pos, root)
             
+            # 解析HAVING子句
+            pos = self._parse_having_clause(pos, root)
+            
             # 解析ORDER BY子句
             pos = self._parse_order_by_clause(pos, root)
+            
+            # 解析LIMIT/OFFSET子句
+            pos = self._parse_limit_clause(pos, root)
         
         return root
     
@@ -252,9 +264,22 @@ class ExtendedParser:
                 column_list.add_child(col_node)
                 pos += 1
             elif token.type == TokenType.IDENTIFIER:
-                col_node = ASTNode(ASTNodeType.IDENTIFIER, token.value)
-                column_list.add_child(col_node)
-                pos += 1
+                # 检查是否是表别名.列名的形式
+                if (pos + 2 < len(self.tokens) and 
+                    self.tokens[pos + 1].type == TokenType.DOT and
+                    self.tokens[pos + 2].type == TokenType.IDENTIFIER):
+                    # 表别名.列名形式
+                    table_alias = self.tokens[pos].value
+                    column_name = self.tokens[pos + 2].value
+                    col_ref = f"{table_alias}.{column_name}"
+                    col_node = ASTNode(ASTNodeType.COLUMN_REF, col_ref)
+                    column_list.add_child(col_node)
+                    pos += 3  # 跳过表别名、点号和列名
+                else:
+                    # 简单的列名
+                    col_node = ASTNode(ASTNodeType.IDENTIFIER, token.value)
+                    column_list.add_child(col_node)
+                    pos += 1
             elif token.type in [TokenType.COUNT, TokenType.SUM, TokenType.AVG, TokenType.MAX, TokenType.MIN]:
                 # 聚合函数
                 agg_node = ASTNode(ASTNodeType.AGGREGATE_FUNCTION, token.value)
@@ -309,19 +334,33 @@ class ExtendedParser:
                     join_node.add_child(table_node)
                     pos += 1
                 
+                # 解析表别名（如果存在）
+                if pos < len(self.tokens) and self.tokens[pos].type == TokenType.IDENTIFIER:
+                    # 表别名
+                    pos += 1
+                
                 # 解析ON子句
                 if pos < len(self.tokens) and self.tokens[pos].type == TokenType.ON:
                     pos += 1
                     on_node = ASTNode(ASTNodeType.ON_CLAUSE)
                     join_node.add_child(on_node)
                     
-                    # 简单解析条件（跳过到下个关键字）
+                    # 解析连接条件
+                    condition_start = pos
                     while (pos < len(self.tokens) and 
                            self.tokens[pos].type not in [TokenType.WHERE, TokenType.GROUP, 
                                                         TokenType.ORDER, TokenType.SEMICOLON, TokenType.JOIN]):
                         pos += 1
+                    
+                    # 构造条件字符串
+                    condition_tokens = self.tokens[condition_start:pos]
+                    condition_str = ' '.join(token.value for token in condition_tokens)
+                    condition_node = ASTNode(ASTNodeType.CONDITION, condition_str)
+                    on_node.add_child(condition_node)
             elif token.type in [TokenType.INNER, TokenType.LEFT, TokenType.RIGHT, TokenType.FULL]:
                 # JOIN类型，继续处理
+                join_type_node = ASTNode(ASTNodeType.IDENTIFIER, token.value)
+                root.add_child(join_type_node)
                 pos += 1
             else:
                 break
@@ -357,9 +396,23 @@ class ExtendedParser:
             while (pos < len(self.tokens) and 
                    self.tokens[pos].type not in [TokenType.HAVING, TokenType.ORDER, TokenType.SEMICOLON]):
                 if self.tokens[pos].type == TokenType.IDENTIFIER:
-                    col_node = ASTNode(ASTNodeType.IDENTIFIER, self.tokens[pos].value)
-                    group_node.add_child(col_node)
-                pos += 1
+                    # 检查是否是表别名.列名的形式
+                    if (pos + 2 < len(self.tokens) and 
+                        self.tokens[pos + 1].type == TokenType.DOT and
+                        self.tokens[pos + 2].type == TokenType.IDENTIFIER):
+                        # 表别名.列名形式
+                        table_alias = self.tokens[pos].value
+                        column_name = self.tokens[pos + 2].value
+                        col_ref = f"{table_alias}.{column_name}"
+                        col_node = ASTNode(ASTNodeType.COLUMN_REF, col_ref)
+                        group_node.add_child(col_node)
+                        pos += 3  # 跳过表别名、点号和列名
+                    else:
+                        col_node = ASTNode(ASTNodeType.IDENTIFIER, self.tokens[pos].value)
+                        group_node.add_child(col_node)
+                        pos += 1
+                else:
+                    pos += 1
             
             root.add_child(group_node)
             
@@ -387,23 +440,153 @@ class ExtendedParser:
             order_node = ASTNode(ASTNodeType.ORDER_BY_CLAUSE)
             
             # 解析排序列表
+            order_list_node = ASTNode(ASTNodeType.ORDER_BY_LIST)
+            order_node.add_child(order_list_node)
+            
             while (pos < len(self.tokens) and 
                    self.tokens[pos].type != TokenType.SEMICOLON):
                 if self.tokens[pos].type == TokenType.IDENTIFIER:
-                    order_spec = ASTNode(ASTNodeType.ORDER_SPEC, self.tokens[pos].value)
-                    order_node.add_child(order_spec)
-                    pos += 1
-                    
-                    # 检查排序方向
-                    if (pos < len(self.tokens) and 
-                        self.tokens[pos].type in [TokenType.ASC, TokenType.DESC]):
-                        direction_node = ASTNode(ASTNodeType.IDENTIFIER, self.tokens[pos].value)
+                    # 检查是否是表别名.列名的形式
+                    if (pos + 2 < len(self.tokens) and 
+                        self.tokens[pos + 1].type == TokenType.DOT and
+                        self.tokens[pos + 2].type == TokenType.IDENTIFIER):
+                        # 表别名.列名形式
+                        order_spec = ASTNode(ASTNodeType.ORDER_BY_SPEC)
+                        table_alias = self.tokens[pos].value
+                        column_name = self.tokens[pos + 2].value
+                        col_ref = f"{table_alias}.{column_name}"
+                        column_node = ASTNode(ASTNodeType.COLUMN_REF, col_ref)
+                        order_spec.add_child(column_node)
+                        pos += 3  # 跳过表别名、点号和列名
+                        
+                        # 检查排序方向
+                        direction = "ASC"  # 默认升序
+                        if (pos < len(self.tokens) and 
+                            self.tokens[pos].type in [TokenType.ASC, TokenType.DESC]):
+                            direction = self.tokens[pos].value.upper()
+                            pos += 1
+                        
+                        direction_node = ASTNode(ASTNodeType.ORDER_SPEC, direction)
                         order_spec.add_child(direction_node)
+                        order_list_node.add_child(order_spec)
+                    else:
+                        # 处理列名
+                        order_spec = ASTNode(ASTNodeType.ORDER_BY_SPEC)
+                        column_node = ASTNode(ASTNodeType.COLUMN_REF, self.tokens[pos].value)
+                        order_spec.add_child(column_node)
                         pos += 1
-                else:
+                        
+                        # 检查排序方向
+                        direction = "ASC"  # 默认升序
+                        if (pos < len(self.tokens) and 
+                            self.tokens[pos].type in [TokenType.ASC, TokenType.DESC]):
+                            direction = self.tokens[pos].value.upper()
+                            pos += 1
+                        
+                        direction_node = ASTNode(ASTNodeType.ORDER_SPEC, direction)
+                        order_spec.add_child(direction_node)
+                        order_list_node.add_child(order_spec)
+                elif self.tokens[pos].type == TokenType.COMMA:
                     pos += 1
+                else:
+                    # 处理聚合函数
+                    if self.tokens[pos].type in [TokenType.COUNT, TokenType.SUM, TokenType.AVG, TokenType.MAX, TokenType.MIN]:
+                        order_spec = ASTNode(ASTNodeType.ORDER_BY_SPEC)
+                        agg_node = ASTNode(ASTNodeType.AGGREGATE_FUNCTION, self.tokens[pos].value)
+                        order_spec.add_child(agg_node)
+                        pos += 1
+                        
+                        # 解析聚合函数参数
+                        if pos < len(self.tokens) and self.tokens[pos].type == TokenType.LEFT_PAREN:
+                            pos += 1  # 跳过左括号
+                            
+                            # 解析参数
+                            if pos < len(self.tokens):
+                                if self.tokens[pos].type == TokenType.ASTERISK:
+                                    # 处理 * 参数
+                                    star_node = ASTNode(ASTNodeType.IDENTIFIER, "*")
+                                    agg_node.add_child(star_node)
+                                    pos += 1
+                                elif self.tokens[pos].type == TokenType.IDENTIFIER:
+                                    # 处理列名参数
+                                    col_ref_node = ASTNode(ASTNodeType.IDENTIFIER, self.tokens[pos].value)
+                                    agg_node.add_child(col_ref_node)
+                                    pos += 1
+                            
+                            # 跳过右括号
+                            if pos < len(self.tokens) and self.tokens[pos].type == TokenType.RIGHT_PAREN:
+                                pos += 1
+                        
+                        # 检查排序方向
+                        direction = "ASC"  # 默认升序
+                        if (pos < len(self.tokens) and 
+                            self.tokens[pos].type in [TokenType.ASC, TokenType.DESC]):
+                            direction = self.tokens[pos].value.upper()
+                            pos += 1
+                        
+                        direction_node = ASTNode(ASTNodeType.ORDER_SPEC, direction)
+                        order_spec.add_child(direction_node)
+                        order_list_node.add_child(order_spec)
+                    else:
+                        pos += 1
             
             root.add_child(order_node)
+        
+        return pos
+    
+    def _parse_limit_clause(self, pos: int, root: ASTNode) -> int:
+        """解析LIMIT/OFFSET子句"""
+        limit_node = ASTNode(ASTNodeType.LIMIT_CLAUSE)
+        
+        # 解析LIMIT
+        if pos < len(self.tokens) and self.tokens[pos].type == TokenType.LIMIT:
+            pos += 1
+            if pos < len(self.tokens) and self.tokens[pos].type == TokenType.NUMBER:
+                limit_value = self.tokens[pos].value
+                limit_node.add_child(ASTNode(ASTNodeType.LIMIT_VALUE, limit_value))
+                pos += 1
+                
+                # 检查是否有OFFSET
+                if pos < len(self.tokens) and self.tokens[pos].type == TokenType.OFFSET:
+                    pos += 1
+                    if pos < len(self.tokens) and self.tokens[pos].type == TokenType.NUMBER:
+                        offset_value = self.tokens[pos].value
+                        limit_node.add_child(ASTNode(ASTNodeType.OFFSET_VALUE, offset_value))
+                        pos += 1
+        # 只有OFFSET的情况
+        elif pos < len(self.tokens) and self.tokens[pos].type == TokenType.OFFSET:
+            pos += 1
+            if pos < len(self.tokens) and self.tokens[pos].type == TokenType.NUMBER:
+                offset_value = self.tokens[pos].value
+                limit_node.add_child(ASTNode(ASTNodeType.OFFSET_VALUE, offset_value))
+                pos += 1
+        
+        # 只有当有LIMIT/OFFSET时才添加节点
+        if limit_node.children:
+            root.add_child(limit_node)
+        
+        return pos
+    
+    def _parse_having_clause(self, pos: int, root: ASTNode) -> int:
+        """解析HAVING子句"""
+        if pos < len(self.tokens) and self.tokens[pos].type == TokenType.HAVING:
+            pos += 1
+            having_node = ASTNode(ASTNodeType.HAVING_CLAUSE)
+            
+            # 解析HAVING条件
+            condition_start = pos
+            while (pos < len(self.tokens) and 
+                   self.tokens[pos].type not in [TokenType.ORDER, TokenType.LIMIT, TokenType.OFFSET, TokenType.SEMICOLON]):
+                pos += 1
+            
+            # 构造条件字符串
+            if pos > condition_start:
+                condition_tokens = self.tokens[condition_start:pos]
+                condition_str = ' '.join(token.value for token in condition_tokens)
+                condition_node = ASTNode(ASTNodeType.CONDITION, condition_str)
+                having_node.add_child(condition_node)
+            
+            root.add_child(having_node)
         
         return pos
     

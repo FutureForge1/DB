@@ -19,6 +19,7 @@ from src.compiler.semantic.analyzer import SemanticAnalyzer
 from src.compiler.semantic.extended_analyzer import ExtendedSemanticAnalyzer
 from src.compiler.semantic.ddl_dml_analyzer import DDLDMLSemanticAnalyzer
 from src.compiler.codegen.translator import QuadrupleTranslator
+from src.compiler.codegen.translator import IntegratedCodeGenerator
 from src.execution.execution_engine import ExecutionEngine
 from src.storage.storage_engine import StorageEngine
 from src.sql_processor import SQLProcessor
@@ -237,6 +238,21 @@ def display_results(results):
     else:
         st.info("ℹ️ 操作成功完成，无返回数据")
 
+def is_complex_query(sql: str) -> bool:
+    """检测是否为复杂查询"""
+    complex_keywords = [
+        'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL',
+        'COUNT', 'SUM', 'AVG', 'MAX', 'MIN',
+        'GROUP', 'ORDER', 'HAVING', 'ASC', 'DESC',
+        'LIMIT', 'OFFSET'
+    ]
+    
+    sql_upper = sql.upper()
+    for keyword in complex_keywords:
+        if keyword in sql_upper:
+            return True
+    return False
+
 def main():
     """主界面"""
     st.title("🗃️ 数据库系统测试平台")
@@ -263,7 +279,17 @@ def main():
         "复杂聚合": "SELECT COUNT(*), AVG(grade), MAX(grade), MIN(grade), SUM(grade) FROM students;",
         "创建表": "CREATE TABLE products (id INT PRIMARY KEY, name VARCHAR(100) NOT NULL, price DECIMAL(10,2));",
         "添加列": "ALTER TABLE students ADD COLUMN email VARCHAR(100);",
-        "创建索引": "CREATE INDEX idx_student_name ON students (name);"
+        "创建索引": "CREATE INDEX idx_student_name ON students (name);",
+        # 复杂查询示例
+        "ORDER BY查询": "SELECT name, age FROM students ORDER BY age DESC;",
+        "GROUP BY查询": "SELECT major, COUNT(*) FROM students GROUP BY major;",
+        "LIMIT查询": "SELECT name, grade FROM students ORDER BY grade DESC LIMIT 3;",
+        "复合查询": "SELECT major, COUNT(*) as student_count, AVG(grade) as avg_grade FROM students GROUP BY major ORDER BY avg_grade DESC;",
+        # JOIN查询示例
+        "INNER JOIN": "SELECT s.name, c.course_name, c.score FROM students s INNER JOIN courses c ON s.id = c.student_id;",
+        "LEFT JOIN": "SELECT s.name, c.course_name FROM students s LEFT JOIN courses c ON s.id = c.student_id;",
+        "JOIN带条件": "SELECT s.name, c.course_name, c.score FROM students s JOIN courses c ON s.id = c.student_id WHERE c.score > 85;",
+        "JOIN多条件": "SELECT s.name, s.major, c.course_name, c.score FROM students s JOIN courses c ON s.id = c.student_id WHERE s.major = 'CS';"
     }
     
     selected_example = st.sidebar.selectbox("选择示例SQL", list(example_queries.keys()))
@@ -292,7 +318,8 @@ def main():
     
     if execute_button and sql_input.strip():
         try:
-            processor = SQLProcessor(storage)
+            # 检测是否为复杂查询
+            is_complex = is_complex_query(sql_input)
             
             if show_details:
                 st.markdown("---")
@@ -323,10 +350,15 @@ def main():
                 # 3. 语义分析
                 with st.container():
                     try:
-                        # 根据SQL类型选择语义分析器
+                        # 根据SQL类型和复杂性选择语义分析器
                         if sql_type == "SELECT":
-                            # SELECT查询使用扩展分析器来支持聚合函数
-                            analyzer = ExtendedSemanticAnalyzer()
+                            # SELECT查询根据复杂性选择分析器
+                            if is_complex:
+                                analyzer = ExtendedSemanticAnalyzer()
+                                st.info("🔍 使用扩展语义分析器处理复杂查询")
+                            else:
+                                analyzer = SemanticAnalyzer()
+                                st.info("🔍 使用基础语义分析器处理简单查询")
                         else:
                             # DDL/DML使用新的分析器
                             analyzer = DDLDMLSemanticAnalyzer()
@@ -348,8 +380,15 @@ def main():
                 if sql_type == "SELECT":
                     with st.container():
                         try:
-                            translator = QuadrupleTranslator()
-                            instructions = translator.translate(quadruples)
+                            # 根据复杂性选择代码生成器
+                            if is_complex:
+                                translator = IntegratedCodeGenerator()
+                                st.info("🔍 使用集成代码生成器处理复杂查询")
+                            else:
+                                translator = QuadrupleTranslator()
+                                st.info("🔍 使用基础代码生成器处理简单查询")
+                            
+                            instructions = translator.generate_target_code(quadruples)
                             display_instructions(instructions)
                         except Exception as e:
                             st.error(f"目标代码生成失败: {e}")
@@ -360,6 +399,7 @@ def main():
             
             # 执行查询
             st.header("🎯 最终查询结果")
+            processor = SQLProcessor(storage)  # 确保使用正确的存储引擎
             success, results, error = processor.process_sql(sql_input)
             
             if success:
@@ -405,10 +445,14 @@ def main():
         - ✅ DDL语句 (CREATE TABLE, DROP TABLE, ALTER TABLE, CREATE INDEX)
         - ✅ DML语句 (INSERT INTO, UPDATE, DELETE FROM)
         - ✅ 聚合函数 (COUNT, AVG, SUM, MAX, MIN)
-        - ❌ 排序查询 (ORDER BY)
-        - ❌ 分组查询 (GROUP BY)
+        - ✅ 排序查询 (ORDER BY)
+        - ✅ 分组查询 (GROUP BY)
+        - ✅ LIMIT/OFFSET查询
+        - ✅ JOIN查询 (INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN)
         """
     )
 
 if __name__ == "__main__":
+    # 初始化处理器
+    storage = init_storage()
     main()

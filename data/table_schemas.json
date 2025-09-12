@@ -51,11 +51,63 @@
       ],
       "primary_key": "id",
       "created_time": null
+    },
+    {
+      "table_name": "courses",
+      "columns": [
+        {
+          "name": "id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": true,
+          "is_unique": false
+        },
+        {
+          "name": "student_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "course_name",
+          "column_type": "STRING",
+          "max_length": 100,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "grade",
+          "column_type": "FLOAT",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": "id",
+      "created_time": "2025-09-11 16:52:33"
     }
   ],
   "table_pages": {
     "students": [
       9
+    ],
+    "courses": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
     ]
   }
 }

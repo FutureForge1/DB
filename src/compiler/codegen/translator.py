@@ -71,6 +71,11 @@ class QuadrupleTranslator:
         project_quads = []
         output_quads = []
         end_quads = []
+        order_by_quads = []
+        group_by_quads = []
+        limit_quads = []
+        offset_quads = []
+        join_quads = []  # 添加JOIN四元式
         other_quads = []
         
         # 分类四元式
@@ -89,24 +94,49 @@ class QuadrupleTranslator:
                 output_quads.append(quad)
             elif quad.op == 'END':
                 end_quads.append(quad)
+            elif quad.op == 'ORDER_BY':
+                order_by_quads.append(quad)
+            elif quad.op == 'GROUP_BY':
+                group_by_quads.append(quad)
+            elif quad.op == 'LIMIT':
+                limit_quads.append(quad)
+            elif quad.op == 'OFFSET':
+                offset_quads.append(quad)
+            elif quad.op in ['JOIN', 'INNER_JOIN', 'LEFT_JOIN', 'RIGHT_JOIN', 'FULL_JOIN']:
+                join_quads.append(quad)
             else:
                 other_quads.append(quad)
         
         # 按正确顺序翻译四元式
-        # BEGIN -> SELECT(OPEN/SCAN) -> 聚合函数 -> PROJECT -> OUTPUT -> END
+        # BEGIN -> OPEN/SCAN -> JOIN -> 聚合函数 -> GROUP BY -> ORDER BY -> LIMIT/OFFSET -> PROJECT -> OUTPUT -> END
         
         # 翻译BEGIN
         for quad in begin_quads:
             print(f"翻译四元式: {quad}")
             self._translate_begin()
         
-        # 翻译SELECT（这会生成OPEN和SCAN指令）
-        for quad in select_quads:
+        # 翻译JOIN操作（这会生成OPEN和SCAN指令）
+        for quad in join_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
         # 翻译聚合函数
         for quad in aggregate_quads:
+            print(f"翻译四元式: {quad}")
+            self._translate_quadruple(quad)
+        
+        # 翻译GROUP BY
+        for quad in group_by_quads:
+            print(f"翻译四元式: {quad}")
+            self._translate_quadruple(quad)
+        
+        # 翻译ORDER BY
+        for quad in order_by_quads:
+            print(f"翻译四元式: {quad}")
+            self._translate_quadruple(quad)
+        
+        # 翻译LIMIT/OFFSET
+        for quad in limit_quads + offset_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
@@ -116,7 +146,7 @@ class QuadrupleTranslator:
             self._translate_quadruple(quad)
         
         # 翻译其他操作
-        for quad in filter_quads + output_quads + other_quads:
+        for quad in filter_quads + select_quads + output_quads + other_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
@@ -157,9 +187,14 @@ class QuadrupleTranslator:
                 self.target_gen.emit_table_open(table)
                 self.opened_tables.add(table)
             
-            # 扫描表
+            # 检查是否是JOIN查询，如果是则不生成SCAN指令
+            is_join_query = any(q.op in ['JOIN', 'INNER_JOIN', 'LEFT_JOIN', 'RIGHT_JOIN', 'FULL_JOIN'] 
+                               for q in self.quadruples_context)
+            
+            # 扫描表 - 但在JOIN情况下不应执行此操作
             source_reg = self.get_or_create_register(result)
-            self.target_gen.emit_scan(table, source_reg)
+            if not is_join_query:
+                self.target_gen.emit_scan(table, source_reg)
             
             # 然后处理投影
             if arg1 != "*":
@@ -182,6 +217,11 @@ class QuadrupleTranslator:
             self._translate_begin()
         elif op == 'END':
             self._translate_end()
+        # 限制操作
+        elif op == 'LIMIT':
+            self._translate_limit(arg1, arg2, result)
+        elif op == 'OFFSET':
+            self._translate_offset(arg1, arg2, result)
         # 复杂查询操作
         elif op == 'JOIN':
             self._translate_join(arg1, arg2, result)
@@ -191,6 +231,8 @@ class QuadrupleTranslator:
             self._translate_left_join(arg1, arg2, result)
         elif op == 'RIGHT_JOIN':
             self._translate_right_join(arg1, arg2, result)
+        elif op == 'FULL_JOIN':
+            self._translate_full_join(arg1, arg2, result)
         elif op == 'COUNT':
             self._translate_count(arg1, arg2, result)
         elif op == 'SUM':
@@ -224,19 +266,48 @@ class QuadrupleTranslator:
         """翻译SELECT操作"""
         print(f"  → SELECT {columns} FROM {table}")
         
+        # 添加调试信息
+        print(f"    四元式上下文中的操作:")
+        for i, quad in enumerate(self.quadruples_context):
+            print(f"      {i}: {quad.op}")
+        
+        # 检查是否已经有连接操作的结果
+        # 如果当前上下文中已经有记录，说明可能已经执行了JOIN操作，不需要再SCAN
+        has_existing_records = False
+        # 简单检查：如果表名与已打开的表不同，可能需要SCAN
+        # 但在JOIN情况下，我们不应该再SCAN
+        
         # 如果表还未打开，先打开
         if table not in self.opened_tables:
             self.target_gen.emit_table_open(table)
             self.opened_tables.add(table)
         
-        # 扫描表
+        # 扫描表 - 但在JOIN情况下不应执行此操作
+        # 检查是否是JOIN操作后的SELECT（通过检查是否已经有连接结果）
+        # 简化处理：对于JOIN查询，我们不生成SCAN指令
+        is_join_query = any(quad.op in ['JOIN', 'INNER_JOIN', 'LEFT_JOIN', 'RIGHT_JOIN', 'FULL_JOIN'] 
+                           for quad in self.quadruples_context)
+        
+        print(f"    是否为JOIN查询: {is_join_query}")
+        
         result_reg = self.get_or_create_register(result)
-        self.target_gen.emit_scan(table, result_reg)
+        
+        # 只有在非JOIN查询时才生成SCAN指令
+        if not is_join_query:
+            print(f"    生成SCAN指令")
+            self.target_gen.emit_scan(table, result_reg)
+        else:
+            print(f"    跳过SCAN指令（JOIN查询）")
         
         # 如果不是选择所有列，需要投影
         if columns != "*":
             proj_reg = self.target_gen.generate_register()
-            self.target_gen.emit_project(result_reg, columns, proj_reg)
+            # 修复：正确处理列参数，支持列表格式
+            if isinstance(columns, list):
+                columns_str = ','.join(columns)
+            else:
+                columns_str = columns
+            self.target_gen.emit_project(result_reg, columns_str, proj_reg)
             # 更新寄存器映射
             self.temp_var_mapping[result] = proj_reg
     
@@ -299,6 +370,16 @@ class QuadrupleTranslator:
         
         source_reg = self.get_or_create_register(source)
         self.target_gen.emit_output(source_reg)
+    
+    def _translate_limit(self, limit: str, offset: str, result: str):
+        """翻译LIMIT操作"""
+        print(f"  → LIMIT {limit}")
+        self.target_gen.emit_limit(limit)
+    
+    def _translate_offset(self, offset: str, limit: str, result: str):
+        """翻译OFFSET操作"""
+        print(f"  → OFFSET {offset}")
+        self.target_gen.emit_offset(offset)
     
     def _translate_join(self, table1: str, table2_and_condition: str, result: str):
         """翻译JOIN操作"""
@@ -369,6 +450,23 @@ class QuadrupleTranslator:
         result_reg = self.get_or_create_register(result)
         self.target_gen.emit(TargetInstructionType.RIGHT_JOIN, [table1, table2, condition], result_reg,
                            comment=f"右连接表 {table1} 和 {table2}")
+    
+    def _translate_full_join(self, table1: str, table2_and_condition: str, result: str):
+        """翻译FULL JOIN操作"""
+        parts = table2_and_condition.split(' ON ')
+        table2 = parts[0]
+        condition = parts[1] if len(parts) > 1 else "true"
+        
+        print(f"  → FULL JOIN {table1} {table2} ON {condition}")
+        
+        for table in [table1, table2]:
+            if table not in self.opened_tables:
+                self.target_gen.emit_table_open(table)
+                self.opened_tables.add(table)
+        
+        result_reg = self.get_or_create_register(result)
+        self.target_gen.emit(TargetInstructionType.FULL_JOIN, [table1, table2, condition], result_reg,
+                           comment=f"全连接表 {table1} 和 {table2}")
     
     def _translate_count(self, source: str, column: str, result: str):
         """翻译COUNT聚合操作"""
@@ -449,17 +547,19 @@ class QuadrupleTranslator:
         source_reg = self.get_or_create_register(source)
         result_reg = self.get_or_create_register(result)
         
-        self.target_gen.emit(TargetInstructionType.ORDER_BY, [source_reg, column_and_direction], result_reg,
-                           comment=f"排序操作: ORDER BY {column_and_direction}")
+        # 确保column_and_direction不是None
+        if column_and_direction is None:
+            column_and_direction = ""
+            
+        self.target_gen.emit_order_by(source_reg, column_and_direction, result_reg)
     
     def _translate_having(self, source: str, condition: str, result: str):
         """翻译HAVING操作"""
-        print(f"  → HAVING {condition} FROM {source}")
+        print(f"  → HAVING {condition}")
         
-        source_reg = self.get_or_create_register(source)
+        # HAVING操作需要将条件传递给执行引擎
         result_reg = self.get_or_create_register(result)
-        
-        self.target_gen.emit(TargetInstructionType.HAVING, [source_reg, condition], result_reg,
+        self.target_gen.emit(TargetInstructionType.HAVING, [condition], result_reg,
                            comment=f"分组过滤: HAVING {condition}")
     
     def print_translation_result(self):

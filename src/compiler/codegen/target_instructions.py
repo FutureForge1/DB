@@ -42,6 +42,10 @@ class TargetInstructionType(Enum):
     ORDER_BY = "ORDER_BY"   # 排序 - ORDER_BY column direction -> register
     HAVING = "HAVING"       # 分组过滤 - HAVING condition
     
+    # 限制指令
+    LIMIT = "LIMIT"         # 限制结果数量 - LIMIT count
+    OFFSET = "OFFSET"       # 结果偏移量 - OFFSET count
+    
     # 窗口函数指令
     ROW_NUMBER = "ROW_NUMBER" # 行号
     RANK = "RANK"           # 排名
@@ -92,7 +96,16 @@ class TargetInstruction:
     
     def __str__(self) -> str:
         """格式化输出指令"""
-        operands_str = " ".join(self.operands) if self.operands else ""
+        # 处理operands中的列表元素
+        processed_operands = []
+        if self.operands:
+            for operand in self.operands:
+                if isinstance(operand, list):
+                    processed_operands.append(','.join(str(item) for item in operand))
+                else:
+                    processed_operands.append(str(operand))
+        
+        operands_str = " ".join(processed_operands) if processed_operands else ""
         result_str = f" -> {self.result}" if self.result else ""
         comment_str = f"  # {self.comment}" if self.comment else ""
         
@@ -217,6 +230,10 @@ class TargetCodeGenerator:
     def emit_order_by(self, source_reg: str, column_and_direction: str, 
                      result_reg: str) -> TargetInstruction:
         """生成ORDER BY指令"""
+        # 确保column_and_direction不是None或空字符串
+        if not column_and_direction:
+            column_and_direction = ""
+            
         return self.emit(TargetInstructionType.ORDER_BY, [source_reg, column_and_direction], result_reg,
                         comment=f"排序操作: ORDER BY {column_and_direction}")
     
@@ -224,6 +241,16 @@ class TargetCodeGenerator:
         """生成HAVING指令"""
         return self.emit(TargetInstructionType.HAVING, [source_reg, condition], result_reg,
                         comment=f"分组过滤: HAVING {condition}")
+    
+    def emit_limit(self, count: str) -> TargetInstruction:
+        """生成LIMIT指令"""
+        return self.emit(TargetInstructionType.LIMIT, [count],
+                        comment=f"限制结果集数量: {count}")
+    
+    def emit_offset(self, count: str) -> TargetInstruction:
+        """生成OFFSET指令"""
+        return self.emit(TargetInstructionType.OFFSET, [count],
+                        comment=f"结果集偏移量: {count}")
     
     def get_instructions(self) -> List[TargetInstruction]:
         """获取生成的指令列表"""

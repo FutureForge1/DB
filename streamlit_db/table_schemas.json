@@ -56,6 +56,15 @@
           "default_value": null,
           "is_primary_key": false,
           "is_unique": false
+        },
+        {
+          "name": "email",
+          "column_type": "STRING",
+          "max_length": 100,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
         }
       ],
       "primary_key": "id",
@@ -170,7 +179,14 @@
       53,
       55,
       57,
-      59
+      59,
+      61,
+      63,
+      65,
+      67,
+      69,
+      71,
+      73
     ],
     "courses": [
       2,
@@ -201,7 +217,14 @@
       54,
       56,
       58,
-      60
+      60,
+      62,
+      64,
+      66,
+      68,
+      70,
+      72,
+      74
     ],
     "products": [
       11

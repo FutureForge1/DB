@@ -65,6 +65,10 @@ class ExecutionEngine:
             'records_output': 0
         }
         
+        # 添加LIMIT和OFFSET相关属性
+        self.limit_count = None
+        self.offset_count = 0
+        
         # 指令处理映射
         self.instruction_handlers = {
             TargetInstructionType.OPEN: self._execute_open,
@@ -100,7 +104,10 @@ class ExecutionEngine:
             TargetInstructionType.HAVING: self._execute_having,
             # 控制流指令
             TargetInstructionType.BEGIN: self._execute_begin,
-            TargetInstructionType.END: self._execute_end
+            TargetInstructionType.END: self._execute_end,
+            # 限制指令
+            TargetInstructionType.LIMIT: self._execute_limit,
+            TargetInstructionType.OFFSET: self._execute_offset,
         }
     
     def execute(self, instructions: List[TargetInstruction]) -> List[Dict[str, Any]]:
@@ -264,17 +271,72 @@ class ExecutionEngine:
             column_list = [col.strip() for col in columns.split(',')]
             projected_records = []
             
+            # 打印第一条记录的键，用于调试
+            if records:
+                print(f"    记录中的键: {list(records[0].keys())}")
+            
             for record in records:
                 projected_record = {}
                 for col in column_list:
+                    print(f"    尝试匹配列: '{col}'")
+                    # 直接匹配列名
                     if col in record:
                         projected_record[col] = record[col]
+                        print(f"    直接匹配列 '{col}' -> {record[col]}")
                     else:
-                        # 检查是否是聚合结果
-                        if col in self.context.registers:
-                            projected_record[col] = self.context.registers[col]
-                        else:
-                            projected_record[col] = None
+                        # 处理带前缀的列名（如 "students.name"）
+                        # 如果直接匹配失败，尝试匹配带前缀的列名
+                        found = False
+                        for key, value in record.items():
+                            print(f"      检查键 '{key}'")
+                            # 精确匹配
+                            if key == col:
+                                projected_record[col] = value
+                                found = True
+                                print(f"    精确匹配列 '{col}' -> {value}")
+                                break
+                            # 处理带表前缀的列名，如 "students.name" 匹配记录中的 "students.name"
+                            elif '.' in col and key == col:
+                                projected_record[col] = value
+                                found = True
+                                print(f"    带前缀匹配列 '{col}' -> {value}")
+                                break
+                            # 处理不带表前缀的列名，如 "name" 匹配记录中的 "students.name"
+                            elif '.' not in col and key.endswith('.' + col):
+                                projected_record[col] = value
+                                found = True
+                                print(f"    后缀匹配列 '{col}' -> {value} (来自 {key})")
+                                break
+                            # 处理表别名形式的列名，如 "s.name" 匹配记录中的 "students.name"
+                            # 需要根据JOIN操作中表名和别名的映射关系来处理
+                            elif '.' in col:
+                                # 分解列名 "s.name" 为表别名 "s" 和列名 "name"
+                                alias_parts = col.split('.')
+                                if len(alias_parts) == 2:
+                                    alias, column_name = alias_parts
+                                    print(f"      尝试别名匹配: alias='{alias}', column_name='{column_name}'")
+                                    # 根据JOIN操作的特性，我们需要匹配完整的表名前缀
+                                    # 例如，"s.name" 应该匹配 "students.name"
+                                    # 我们可以通过检查键是否以完整表名开头来实现
+                                    if alias == 's' and key.startswith('students.') and key.endswith('.' + column_name):
+                                        projected_record[col] = value
+                                        found = True
+                                        print(f"    别名匹配列 '{col}' -> {value} (来自 {key})")
+                                        break
+                                    elif alias == 'c' and key.startswith('courses.') and key.endswith('.' + column_name):
+                                        projected_record[col] = value
+                                        found = True
+                                        print(f"    别名匹配列 '{col}' -> {value} (来自 {key})")
+                                        break
+                        
+                        # 如果还是没找到，检查是否是聚合结果
+                        if not found:
+                            if col in self.context.registers:
+                                projected_record[col] = self.context.registers[col]
+                                print(f"    寄存器匹配列 '{col}' -> {self.context.registers[col]}")
+                            else:
+                                projected_record[col] = None
+                                print(f"    未找到列 '{col}'，设置为 None")
                 # 只有当projected_record非空时才添加
                 if projected_record:
                     projected_records.append(projected_record)
@@ -290,6 +352,16 @@ class ExecutionEngine:
         """执行OUTPUT指令 - 输出结果"""
         # 确定要输出的记录
         records_to_output = self.context.filtered_records or self.context.current_records
+        
+        # 应用OFFSET
+        if self.offset_count > 0:
+            records_to_output = records_to_output[self.offset_count:]
+            print(f"  → 应用OFFSET {self.offset_count}，剩余 {len(records_to_output)} 条记录")
+        
+        # 应用LIMIT
+        if self.limit_count is not None:
+            records_to_output = records_to_output[:self.limit_count]
+            print(f"  → 应用LIMIT {self.limit_count}，最终输出 {len(records_to_output)} 条记录")
         
         # 应用列投影
         if self.context.projected_columns:
@@ -464,6 +536,7 @@ class ExecutionEngine:
                 if self._evaluate_join_condition(r1, r2, condition, table1, table2):
                     # 创建合并记录
                     merged_record = {}
+                    # 使用表名作为前缀
                     for key, value in r1.items():
                         merged_record[f"{table1}.{key}"] = value
                     for key, value in r2.items():
@@ -472,6 +545,9 @@ class ExecutionEngine:
         
         self.context.current_records = joined_records
         print(f"    内连接结果: {len(joined_records)} 条记录")
+        # 调试输出第一条记录
+        if joined_records:
+            print(f"    第一条记录: {joined_records[0]}")
     
     def _execute_left_join(self, instruction: TargetInstruction) -> None:
         """执行LEFT JOIN指令 - 左连接"""
@@ -559,37 +635,148 @@ class ExecutionEngine:
     
     def _execute_full_join(self, instruction: TargetInstruction) -> None:
         """执行FULL JOIN指令 - 全外连接"""
-        print(f"  → 全外连接: 暂未实现")
-        # 全外连接实现较复杂，这里先简化处理
-        self._execute_inner_join(instruction)
+        if len(instruction.operands) < 3:
+            print("  ⚠️  FULL JOIN指令参数不足")
+            return
+        
+        table1 = instruction.operands[0]
+        table2 = instruction.operands[1]
+        condition = instruction.operands[2]
+        
+        print(f"  → 全外连接: {table1} FULL JOIN {table2} ON {condition}")
+        
+        # 获取两个表的数据
+        records1 = self.storage_engine.select(table1)
+        records2 = self.storage_engine.select(table2)
+        
+        # 执行全外连接
+        joined_records = []
+        matched_records1 = set()  # 记录表1中已匹配的记录索引
+        matched_records2 = set()  # 记录表2中已匹配的记录索引
+        
+        # 内连接部分
+        for i, r1 in enumerate(records1):
+            for j, r2 in enumerate(records2):
+                if self._evaluate_join_condition(r1, r2, condition, table1, table2):
+                    # 创建合并记录
+                    merged_record = {}
+                    for key, value in r1.items():
+                        merged_record[f"{table1}.{key}"] = value
+                    for key, value in r2.items():
+                        merged_record[f"{table2}.{key}"] = value
+                    joined_records.append(merged_record)
+                    matched_records1.add(i)
+                    matched_records2.add(j)
+        
+        # 左外连接部分（表1中未匹配的记录）
+        for i, r1 in enumerate(records1):
+            if i not in matched_records1:
+                merged_record = {}
+                for key, value in r1.items():
+                    merged_record[f"{table1}.{key}"] = value
+                # 为右表字段设置NULL
+                if records2:
+                    for key in records2[0].keys():
+                        merged_record[f"{table2}.{key}"] = None
+                joined_records.append(merged_record)
+        
+        # 右外连接部分（表2中未匹配的记录）
+        for j, r2 in enumerate(records2):
+            if j not in matched_records2:
+                merged_record = {}
+                # 为左表字段设置NULL
+                if records1:
+                    for key in records1[0].keys():
+                        merged_record[f"{table1}.{key}"] = None
+                for key, value in r2.items():
+                    merged_record[f"{table2}.{key}"] = value
+                joined_records.append(merged_record)
+        
+        self.context.current_records = joined_records
+        print(f"    全外连接结果: {len(joined_records)} 条记录")
     
     def _evaluate_join_condition(self, record1: Dict[str, Any], record2: Dict[str, Any], 
                                condition: str, table1: str, table2: str) -> bool:
         """评估连接条件"""
-        # 简化的条件评估，假设条件格式为 "table1.col1 = table2.col2"
+        # 简化的条件评估，支持多种格式的条件
         try:
+            # 处理格式 "s . id = c . student_id" 或 "table1.col1 = table2.col2"
             if ' = ' in condition:
                 left_part, right_part = condition.split(' = ')
                 left_part = left_part.strip()
                 right_part = right_part.strip()
                 
-                # 解析左边
+                # 移除空格
+                left_part = left_part.replace(' ', '')
+                right_part = right_part.replace(' ', '')
+                
+                # 解析左边 - 支持 "table.column" 和 "alias.column" 格式
+                left_value = None
                 if '.' in left_part:
-                    left_table, left_col = left_part.split('.', 1)
-                    left_value = record1[left_col] if left_table == table1 else record2[left_col]
+                    left_alias, left_col = left_part.split('.', 1)
+                    # 根据别名查找对应表的值
+                    if left_alias == table1 or (hasattr(self, '_get_table_alias') and self._get_table_alias(table1) == left_alias):
+                        left_value = record1.get(left_col)
+                    elif left_alias == table2 or (hasattr(self, '_get_table_alias') and self._get_table_alias(table2) == left_alias):
+                        left_value = record2.get(left_col)
+                    else:
+                        # 尝试直接查找
+                        left_value = record1.get(left_col, record2.get(left_col))
+                else:
+                    # 直接列名
+                    left_value = record1.get(left_part, record2.get(left_part))
+                
+                # 解析右边 - 支持 "table.column" 和 "alias.column" 格式
+                right_value = None
+                if '.' in right_part:
+                    right_alias, right_col = right_part.split('.', 1)
+                    # 根据别名查找对应表的值
+                    if right_alias == table1 or (hasattr(self, '_get_table_alias') and self._get_table_alias(table1) == right_alias):
+                        right_value = record1.get(right_col)
+                    elif right_alias == table2 or (hasattr(self, '_get_table_alias') and self._get_table_alias(table2) == right_alias):
+                        right_value = record2.get(right_col)
+                    else:
+                        # 尝试直接查找
+                        right_value = record1.get(right_col, record2.get(right_col))
+                else:
+                    # 直接列名
+                    right_value = record1.get(right_part, record2.get(right_part))
+                
+                return left_value == right_value
+            elif ' = ' in condition.replace(' ', ''):  # 处理带空格的条件
+                # 移除所有空格后处理
+                clean_condition = condition.replace(' ', '')
+                left_part, right_part = clean_condition.split('=')
+                
+                # 解析左边
+                left_value = None
+                if '.' in left_part:
+                    left_alias, left_col = left_part.split('.', 1)
+                    if left_alias == table1:
+                        left_value = record1.get(left_col)
+                    elif left_alias == table2:
+                        left_value = record2.get(left_col)
+                    else:
+                        left_value = record1.get(left_col, record2.get(left_col))
                 else:
                     left_value = record1.get(left_part, record2.get(left_part))
                 
                 # 解析右边
+                right_value = None
                 if '.' in right_part:
-                    right_table, right_col = right_part.split('.', 1)
-                    right_value = record1[right_col] if right_table == table1 else record2[right_col]
+                    right_alias, right_col = right_part.split('.', 1)
+                    if right_alias == table1:
+                        right_value = record1.get(right_col)
+                    elif right_alias == table2:
+                        right_value = record2.get(right_col)
+                    else:
+                        right_value = record1.get(right_col, record2.get(right_col))
                 else:
                     right_value = record1.get(right_part, record2.get(right_part))
                 
                 return left_value == right_value
         except Exception as e:
-            print(f"    条件评估错误: {e}")
+            print(f"    条件评估错误: '{condition}' - {e}")
         
         return False  # 默认不匹配
     
@@ -837,10 +1024,19 @@ class ExecutionEngine:
         source_reg = instruction.operands[0]
         order_spec = instruction.operands[1]
         
+        # 检查order_spec是否为None或空字符串
+        if order_spec is None or order_spec == "":
+            print("ORDER BY指令排序规范为空")
+            return
+            
         records = self.context.current_records
         
         # 解析排序规范（如 "column ASC" 或 "column DESC"）
         parts = order_spec.strip().split()
+        if not parts:
+            print("ORDER BY指令排序规范格式错误")
+            return
+            
         column = parts[0]
         direction = parts[1].upper() if len(parts) > 1 else 'ASC'
         
@@ -858,21 +1054,69 @@ class ExecutionEngine:
     
     def _execute_having(self, instruction: TargetInstruction) -> None:
         """执行HAVING指令"""
-        if len(instruction.operands) < 2:
+        if len(instruction.operands) < 1:
             print("HAVING指令参数不足")
             return
         
-        source_reg = instruction.operands[0]
-        condition = instruction.operands[1]
-        
-        # HAVING用于对分组后的结果进行过滤
-        # 这里先简化实现，只做基本过滤
-        records = self.context.current_records
+        condition = instruction.operands[0]
         print(f"  → HAVING {condition}: 对分组结果进行过滤")
         
-        # 这里可以添加更复杂的HAVING条件处理逻辑
-        # 目前简化为不过滤
-        print(f"    保持 {len(records)} 条记录")
+        # HAVING用于对分组后的结果进行过滤
+        # 这里实现一个简化的HAVING条件处理逻辑
+        filtered_groups = {}
+        
+        # 简化的条件解析，支持 COUNT(*) > 1 这样的条件
+        if '>' in condition:
+            parts = condition.split('>')
+            left_part = parts[0].strip()
+            right_part = parts[1].strip()
+            
+            # 尝试解析右值为数字
+            try:
+                threshold = float(right_part)
+            except ValueError:
+                print(f"    无法解析阈值: {right_part}")
+                return
+            
+            # 处理聚合函数条件
+            if 'COUNT' in left_part:
+                # 对每个分组检查COUNT是否满足条件
+                for group_key, records in self.context.groups.items():
+                    count = len(records)
+                    if count > threshold:
+                        filtered_groups[group_key] = records
+            elif 'SUM' in left_part:
+                # 处理SUM条件
+                column = left_part.replace('SUM(', '').replace(')', '').strip()
+                for group_key, records in self.context.groups.items():
+                    total = sum(record.get(column, 0) for record in records if record.get(column) is not None)
+                    if total > threshold:
+                        filtered_groups[group_key] = records
+            elif 'AVG' in left_part:
+                # 处理AVG条件
+                column = left_part.replace('AVG(', '').replace(')', '').replace('(', '').strip()
+                for group_key, records in self.context.groups.items():
+                    total = sum(record.get(column, 0) for record in records if record.get(column) is not None)
+                    count = sum(1 for record in records if record.get(column) is not None)
+                    avg = total / count if count > 0 else 0
+                    if avg > threshold:
+                        filtered_groups[group_key] = records
+        else:
+            # 默认保持所有分组
+            filtered_groups = self.context.groups
+        
+        # 更新分组信息
+        self.context.groups = filtered_groups
+        
+        # 将分组结果转换为记录列表
+        filtered_records = []
+        for group_key, records in filtered_groups.items():
+            # 取第一个记录作为代表
+            if records:
+                filtered_records.extend(records)
+        
+        self.context.current_records = filtered_records
+        print(f"    过滤后保留 {len(filtered_groups)} 个分组，共 {len(filtered_records)} 条记录")
     
     def _execute_begin(self, instruction: TargetInstruction) -> None:
         """执行BEGIN指令 - 开始执行"""
@@ -957,6 +1201,32 @@ class ExecutionEngine:
         
         # 默认返回字符串
         return operand
+    
+    def _execute_limit(self, instruction: TargetInstruction) -> None:
+        """执行LIMIT指令"""
+        if len(instruction.operands) < 1:
+            print("LIMIT指令参数不足")
+            return
+        
+        limit_value = instruction.operands[0]
+        try:
+            self.limit_count = int(limit_value)
+            print(f"  → LIMIT {self.limit_count}")
+        except ValueError:
+            print(f"  → LIMIT 值无效: {limit_value}")
+    
+    def _execute_offset(self, instruction: TargetInstruction) -> None:
+        """执行OFFSET指令"""
+        if len(instruction.operands) < 1:
+            print("OFFSET指令参数不足")
+            return
+        
+        offset_value = instruction.operands[0]
+        try:
+            self.offset_count = int(offset_value)
+            print(f"  → OFFSET {self.offset_count}")
+        except ValueError:
+            print(f"  → OFFSET 值无效: {offset_value}")
     
     def get_stats(self) -> Dict[str, Any]:
         """获取执行统计信息"""

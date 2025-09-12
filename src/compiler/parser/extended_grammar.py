@@ -23,9 +23,9 @@ class ExtendedSQLGrammar:
                 ["select_statement"]
             ],
             
-            # 扩展的SELECT语句
+            # 扩展的SELECT语句（添加LIMIT/OFFSET支持）
             "select_statement": [
-                ["SELECT", "select_list", "from_clause", "where_clause", "group_by_clause", "having_clause", "order_by_clause", ";"]
+                ["SELECT", "select_list", "from_clause", "where_clause", "group_by_clause", "having_clause", "order_by_clause", "limit_clause", ";"]
             ],
             
             # SELECT列表（支持聚合函数）
@@ -248,6 +248,21 @@ class ExtendedSQLGrammar:
                 ["ASC"],
                 ["DESC"],
                 ["ε"]
+            ],
+            
+            # LIMIT/OFFSET子句（修改为LL(1)兼容形式）
+            "limit_clause": [
+                ["limit_spec", "limit_clause_tail"],
+                ["ε"]
+            ],
+            
+            "limit_spec": [
+                ["LIMIT", "NUMBER"]
+            ],
+            
+            "limit_clause_tail": [
+                ["OFFSET", "NUMBER"],
+                ["ε"]
             ]
         }
         
@@ -274,6 +289,9 @@ class ExtendedSQLGrammar:
             "ε", "$"
         }
         
+        # 更新终结符集合，添加LIMIT和OFFSET
+        self.terminals.update({"LIMIT", "OFFSET"})
+        
         # 非终结符集合
         self.nonterminals = set(self.productions.keys())
         
@@ -293,7 +311,7 @@ class ExtendedSQLGrammar:
         # select_statement的预测分析表项
         self.parsing_table[("select_statement", "SELECT")] = [
             "SELECT", "select_list", "from_clause", "where_clause", 
-            "group_by_clause", "having_clause", "order_by_clause", ";"
+            "group_by_clause", "having_clause", "order_by_clause", "limit_clause", ";"
         ]
         
         # select_list的预测分析表项
@@ -341,23 +359,23 @@ class ExtendedSQLGrammar:
         # table_alias
         self.parsing_table[("table_alias", "AS")] = ["AS", "IDENTIFIER"]
         self.parsing_table[("table_alias", "IDENTIFIER")] = ["IDENTIFIER"]
-        for token in ["WHERE", "GROUP", "HAVING", "ORDER", ";", "JOIN", "INNER", "LEFT", "RIGHT", "FULL"]:
+        for token in ["WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", ";", "JOIN", "INNER", "LEFT", "RIGHT", "FULL"]:
             self.parsing_table[("table_alias", token)] = ["ε"]
         
         # table_column
         self.parsing_table[("table_column", "IDENTIFIER")] = ["column_ref", "column_alias"]
         
-        # column_ref
-        self.parsing_table[("column_ref", "IDENTIFIER")] = ["IDENTIFIER"]
-        
-        # 更新column_ref以支持table.column形式
-        # 这里简化处理，在AST构建阶段处理
+        # column_ref - 处理点号（表别名.列名）和简单标识符
+        self.parsing_table[("column_ref", "IDENTIFIER")] = ["table_ref", ".", "IDENTIFIER"]
         
         # column_alias
         self.parsing_table[("column_alias", "AS")] = ["AS", "IDENTIFIER"]
         self.parsing_table[("column_alias", "IDENTIFIER")] = ["IDENTIFIER"]
-        for token in [",", "FROM", "WHERE", "GROUP", "HAVING", "ORDER", ";"]:
+        for token in [",", "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", ";"]:
             self.parsing_table[("column_alias", token)] = ["ε"]
+        
+        # table_ref
+        self.parsing_table[("table_ref", "IDENTIFIER")] = ["IDENTIFIER"]
         
         # aggregate_function
         for func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
@@ -371,7 +389,7 @@ class ExtendedSQLGrammar:
         # join_list
         for token in ["INNER", "LEFT", "RIGHT", "FULL", "JOIN"]:
             self.parsing_table[("join_list", token)] = ["join_clause", "join_list"]
-        for token in ["WHERE", "GROUP", "HAVING", "ORDER", ";"]:
+        for token in ["WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", ";"]:
             self.parsing_table[("join_list", token)] = ["ε"]
         
         # join_clause
@@ -397,7 +415,7 @@ class ExtendedSQLGrammar:
         
         # where_clause
         self.parsing_table[("where_clause", "WHERE")] = ["WHERE", "condition"]
-        for token in ["GROUP", "HAVING", "ORDER", ";"]:
+        for token in ["GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", ";"]:
             self.parsing_table[("where_clause", token)] = ["ε"]
         
         # condition
@@ -408,7 +426,7 @@ class ExtendedSQLGrammar:
         
         # or_condition_tail
         self.parsing_table[("or_condition_tail", "OR")] = ["OR", "and_condition", "or_condition_tail"]
-        for token in ["GROUP", "HAVING", "ORDER", ";", ")"]:
+        for token in ["GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", ";", ")"]:
             self.parsing_table[("or_condition_tail", token)] = ["ε"]
         
         # and_condition
@@ -416,7 +434,7 @@ class ExtendedSQLGrammar:
         
         # and_condition_tail
         self.parsing_table[("and_condition_tail", "AND")] = ["AND", "simple_condition", "and_condition_tail"]
-        for token in ["OR", "GROUP", "HAVING", "ORDER", ";", ")"]:
+        for token in ["OR", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", ";", ")"]:
             self.parsing_table[("and_condition_tail", token)] = ["ε"]
         
         # simple_condition
@@ -433,7 +451,7 @@ class ExtendedSQLGrammar:
         
         # group_by_clause
         self.parsing_table[("group_by_clause", "GROUP")] = ["GROUP", "BY", "group_by_list"]
-        for token in ["HAVING", "ORDER", ";"]:
+        for token in ["HAVING", "ORDER", "LIMIT", "OFFSET", ";"]:
             self.parsing_table[("group_by_clause", token)] = ["ε"]
         
         # group_by_list
@@ -441,17 +459,18 @@ class ExtendedSQLGrammar:
         
         # group_by_list_tail
         self.parsing_table[("group_by_list_tail", ",")] = [",", "column_ref", "group_by_list_tail"]
-        for token in ["HAVING", "ORDER", ";"]:
+        for token in ["HAVING", "ORDER", "LIMIT", "OFFSET", ";"]:
             self.parsing_table[("group_by_list_tail", token)] = ["ε"]
         
         # having_clause
         self.parsing_table[("having_clause", "HAVING")] = ["HAVING", "condition"]
-        for token in ["ORDER", ";"]:
+        for token in ["ORDER", "LIMIT", "OFFSET", ";"]:
             self.parsing_table[("having_clause", token)] = ["ε"]
         
         # order_by_clause
         self.parsing_table[("order_by_clause", "ORDER")] = ["ORDER", "BY", "order_by_list"]
-        self.parsing_table[("order_by_clause", ";")] = ["ε"]
+        for token in ["LIMIT", "OFFSET", ";"]:
+            self.parsing_table[("order_by_clause", token)] = ["ε"]
         
         # order_by_list
         # 支持列引用和聚合函数
@@ -461,7 +480,8 @@ class ExtendedSQLGrammar:
         
         # order_by_list_tail
         self.parsing_table[("order_by_list_tail", ",")] = [",", "order_by_spec", "order_by_list_tail"]
-        self.parsing_table[("order_by_list_tail", ";")] = ["ε"]
+        for token in ["LIMIT", "OFFSET", ";"]:
+            self.parsing_table[("order_by_list_tail", token)] = ["ε"]
         
         # order_by_spec
         # 支持列引用和聚合函数
@@ -472,8 +492,21 @@ class ExtendedSQLGrammar:
         # order_direction
         self.parsing_table[("order_direction", "ASC")] = ["ASC"]
         self.parsing_table[("order_direction", "DESC")] = ["DESC"]
-        for token in [",", ";"]:
+        for token in [",", "LIMIT", "OFFSET", ";"]:
             self.parsing_table[("order_direction", token)] = ["ε"]
+        
+        # limit_clause（更新为新的LL(1)兼容形式）
+        self.parsing_table[("limit_clause", "LIMIT")] = ["limit_spec", "limit_clause_tail"]
+        for token in ["OFFSET", ";"]:
+            self.parsing_table[("limit_clause", token)] = ["ε"]
+        
+        # limit_spec
+        self.parsing_table[("limit_spec", "LIMIT")] = ["LIMIT", "NUMBER"]
+        
+        # limit_clause_tail
+        self.parsing_table[("limit_clause_tail", "OFFSET")] = ["OFFSET", "NUMBER"]
+        for token in [";"]:
+            self.parsing_table[("limit_clause_tail", token)] = ["ε"]
     
     def get_production(self, nonterminal: str, terminal: str):
         """获取预测分析表中的产生式"""
@@ -507,7 +540,9 @@ def test_extended_grammar():
         ("column_spec", "*"),
         ("where_clause", "WHERE"),
         ("group_by_clause", "GROUP"),
-        ("order_by_clause", "ORDER")
+        ("order_by_clause", "ORDER"),
+        ("from_clause", "FROM"),
+        ("column_ref", "IDENTIFIER")
     ]
     
     print("\\n预测分析表测试:")

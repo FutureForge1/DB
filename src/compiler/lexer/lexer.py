@@ -14,6 +14,53 @@ from src.common.types import (
     SQL_KEYWORDS, OPERATORS, DELIMITERS
 )
 
+# 关键字映射表
+KEYWORD_MAP = {
+    # 基本查询关键字
+    'SELECT': TokenType.SELECT,
+    'FROM': TokenType.FROM,
+    'WHERE': TokenType.WHERE,
+    'AND': TokenType.AND,
+    'OR': TokenType.OR,
+    'NOT': TokenType.NOT,
+    
+    # 复杂查询关键字
+    'JOIN': TokenType.JOIN,
+    'INNER': TokenType.INNER,
+    'LEFT': TokenType.LEFT,
+    'RIGHT': TokenType.RIGHT,
+    'OUTER': TokenType.OUTER,
+    'FULL': TokenType.FULL,
+    'ON': TokenType.ON,
+    
+    # 聚合函数关键字
+    'GROUP': TokenType.GROUP,
+    'BY': TokenType.BY,
+    'HAVING': TokenType.HAVING,
+    'COUNT': TokenType.COUNT,
+    'SUM': TokenType.SUM,
+    'AVG': TokenType.AVG,
+    'MAX': TokenType.MAX,
+    'MIN': TokenType.MIN,
+    
+    # 排序关键字
+    'ORDER': TokenType.ORDER,
+    'ASC': TokenType.ASC,
+    'DESC': TokenType.DESC,
+    
+    # 限制关键字
+    'LIMIT': TokenType.LIMIT,
+    'OFFSET': TokenType.OFFSET,
+    
+    # 子查询关键字
+    'IN': TokenType.IN,
+    'EXISTS': TokenType.EXISTS,
+    'ALL': TokenType.ALL,
+    'ANY': TokenType.ANY,
+    'SOME': TokenType.SOME,
+    
+}
+
 class Lexer:    
     def __init__(self, source: str):
         """
