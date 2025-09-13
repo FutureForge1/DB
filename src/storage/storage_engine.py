@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from src.storage.page.page import PageManager, PageType
 from src.storage.buffer.buffer_manager import BufferManager, ReplacementPolicy
 from src.storage.table.table_manager import TableManager, TableSchema, ColumnDefinition, ColumnType
+from src.storage.index.bptree_index import BPTreeIndexManager  # 添加B+树索引管理器导入
 
 class StorageEngine:
     """存储引擎主类"""
@@ -34,6 +35,8 @@ class StorageEngine:
         self.page_manager = PageManager(data_dir)
         self.buffer_manager = BufferManager(buffer_size, self.page_manager, replacement_policy)
         self.table_manager = TableManager(self.buffer_manager)
+        self.index_manager = BPTreeIndexManager(self.buffer_manager)  # 初始化索引管理器
+        self.index_manager = BPTreeIndexManager(self.buffer_manager)  # 添加B+树索引管理器
         
         # 统计信息
         self.stats = {
@@ -94,8 +97,16 @@ class StorageEngine:
         """
         if self.table_manager.insert_record(table_name, record):
             self.stats['records_inserted'] += 1
+            # 更新相关索引
+            self._update_indexes_on_insert(table_name, record)
             return True
         return False
+    
+    def _update_indexes_on_insert(self, table_name: str, record: Dict[str, Any]) -> None:
+        """在插入记录时更新索引"""
+        # 这里应该更新所有相关的索引
+        # 简化实现，实际应该遍历所有相关索引并更新
+        pass
     
     def select(self, table_name: str, 
               columns: Optional[List[str]] = None,
@@ -112,6 +123,35 @@ class StorageEngine:
             查询结果列表
         """
         self.stats['queries_executed'] += 1
+        
+        # 检查是否有可用的索引可以加速查询
+        if where and self._can_use_index(table_name, where):
+            return self._select_with_index(table_name, columns, where)
+        else:
+            return self.table_manager.select_records(table_name, where, columns)
+    
+    def _can_use_index(self, table_name: str, where: Dict[str, Any]) -> bool:
+        """检查是否可以使用索引加速查询"""
+        # 简化实现：检查是否存在等值查询条件
+        if not where:
+            return False
+        
+        # 检查是否为简单的等值查询
+        for field, value in where.items():
+            # 只处理简单的等值查询，不处理范围查询或复杂条件
+            if not isinstance(value, dict):
+                # 检查是否存在对应的索引
+                # 这里需要更复杂的索引匹配逻辑
+                return True
+        
+        return False
+    
+    def _select_with_index(self, table_name: str, 
+                          columns: Optional[List[str]], 
+                          where: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """使用索引进行查询"""
+        # 简化实现：直接使用表管理器的查询方法
+        # 实际实现中应该使用索引来定位记录
         return self.table_manager.select_records(table_name, where, columns)
     
     def update(self, table_name: str, 
@@ -198,7 +238,25 @@ class StorageEngine:
         Returns:
             是否创建成功
         """
+        # 首先尝试创建B+树索引
+        if self.index_manager.create_index(index_name, table_name, columns):
+            print(f"  ✓ B+树索引 '{index_name}' 创建成功")
+            return True
+        
+        # 如果B+树索引创建失败，回退到表管理器的简单索引实现
         return self.table_manager.create_index(index_name, table_name, columns)
+    
+    def get_index(self, index_name: str):
+        """
+        获取索引实例
+        
+        Args:
+            index_name: 索引名
+            
+        Returns:
+            索引实例或None
+        """
+        return self.index_manager.get_index(index_name)
     
     def flush_all(self) -> int:
         """将所有脏页刷新到磁盘"""
@@ -378,7 +436,7 @@ def test_storage_engine():
     print(f"  数据库中的表: {tables}")
     
     for table in tables:
-        info = storage.describe_table(table)
+        info = storage.get_table_info(table)  # 修复函数调用
         if info:
             print(f"\n  表 '{table}' 信息:")
             print(f"    列: {info['columns']}")
