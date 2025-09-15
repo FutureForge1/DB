@@ -122,9 +122,19 @@ class UnifiedSQLParser:
             'GROUP', 'ORDER', 'HAVING', 'ASC', 'DESC'
         }
         
+        # 检查是否有复杂查询关键字
         for token in self.tokens:
             if token.value.upper() in complex_keywords:
                 return True
+                
+        # 检查是否有表别名.列名的形式（点号）
+        for i, token in enumerate(self.tokens):
+            if (token.type == TokenType.DOT and 
+                i > 0 and i < len(self.tokens) - 1 and
+                self.tokens[i-1].type == TokenType.IDENTIFIER and
+                self.tokens[i+1].type == TokenType.IDENTIFIER):
+                return True
+                
         return False
     
     def get_sql_type(self) -> str:

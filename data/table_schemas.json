@@ -1,7 +1,7 @@
 {
   "tables": [
     {
-      "table_name": "students",
+      "table_name": "test_scores",
       "columns": [
         {
           "name": "id",
@@ -16,56 +16,38 @@
           "name": "name",
           "column_type": "STRING",
           "max_length": 50,
-          "nullable": false,
+          "nullable": true,
           "default_value": null,
           "is_primary_key": false,
           "is_unique": false
         },
         {
-          "name": "age",
+          "name": "subject",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "score",
           "column_type": "INTEGER",
           "max_length": null,
-          "nullable": false,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "grade",
-          "column_type": "FLOAT",
-          "max_length": null,
           "nullable": true,
           "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "active",
-          "column_type": "BOOLEAN",
-          "max_length": null,
-          "nullable": true,
-          "default_value": true,
           "is_primary_key": false,
           "is_unique": false
         }
       ],
       "primary_key": "id",
-      "created_time": null
+      "created_time": "2025-09-15 00:40:02"
     },
     {
-      "table_name": "courses",
+      "table_name": "books",
       "columns": [
         {
-          "name": "id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": true,
-          "is_unique": false
-        },
-        {
-          "name": "student_id",
+          "name": "book_id",
           "column_type": "INTEGER",
           "max_length": null,
           "nullable": true,
@@ -74,17 +56,35 @@
           "is_unique": false
         },
         {
-          "name": "course_name",
+          "name": "title",
           "column_type": "STRING",
-          "max_length": 100,
+          "max_length": null,
           "nullable": true,
           "default_value": null,
           "is_primary_key": false,
           "is_unique": false
         },
         {
-          "name": "grade",
-          "column_type": "FLOAT",
+          "name": "genre",
+          "column_type": "STRING",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "pages",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "author_id",
+          "column_type": "INTEGER",
           "max_length": null,
           "nullable": true,
           "default_value": null,
@@ -92,22 +92,46 @@
           "is_unique": false
         }
       ],
-      "primary_key": "id",
-      "created_time": "2025-09-11 16:52:33"
+      "primary_key": null,
+      "created_time": "2025-09-15 11:37:01"
+    },
+    {
+      "table_name": "authors",
+      "columns": [
+        {
+          "name": "author_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "author_name",
+          "column_type": "STRING",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": null,
+      "created_time": "2025-09-15 11:37:01"
     }
   ],
   "table_pages": {
-    "students": [
-      9
-    ],
-    "courses": [
-      10,
-      11,
+    "test_scores": [
       12,
       13,
-      14,
-      15,
-      16
+      14
+    ],
+    "books": [
+      98
+    ],
+    "authors": [
+      99
     ]
   }
 }

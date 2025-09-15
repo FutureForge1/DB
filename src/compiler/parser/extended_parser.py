@@ -72,7 +72,17 @@ class ExtendedParser:
                 stack_display = ' '.join(reversed(self.parse_stack))
                 remaining_input = self._get_remaining_input()
                 
-                if self.grammar.is_terminal(stack_top):
+                # 特殊处理：当栈顶是column_ref且当前输入是IDENTIFIER，
+                # 且下一个token是点号时，使用特殊的处理逻辑
+                if (stack_top == "column_ref" and 
+                    current_input == "IDENTIFIER" and
+                    self._next_token_is_dot()):
+                    # 使用表别名.列名的形式
+                    action = "column_ref -> table_ref . IDENTIFIER"
+                    self.parse_stack.pop()  # 弹出column_ref
+                    # 压入 table_ref . IDENTIFIER
+                    self.parse_stack.extend(["IDENTIFIER", ".", "table_ref"])
+                elif self.grammar.is_terminal(stack_top):
                     # 栈顶是终结符
                     if stack_top == current_input:
                         # 匹配成功
@@ -128,7 +138,7 @@ class ExtendedParser:
                 
                 # 防止死循环
                 if step > 100:
-                    print("⚠️ 分析步骤过多，可能存在问题")
+                    print("Too many parsing steps, possible infinite loop")
                     break
             
             # 检查是否成功分析
@@ -136,7 +146,7 @@ class ExtendedParser:
                 self.parse_stack[0] == '$' and 
                 self.current_token_type() == '$'):
                 print("-" * 80)
-                print("✅ 扩展语法分析成功!")
+                print("Extended parsing successful!")
                 
                 # 构建AST
                 self.ast_root = self._build_extended_ast()
@@ -146,8 +156,15 @@ class ExtendedParser:
                 
         except SyntaxError as e:
             print("-" * 80)
-            print(f"❌ 扩展语法分析失败: {e}")
+            print(f"Extended parsing failed: {e}")
             return None
+    
+    def _next_token_is_dot(self) -> bool:
+        """检查下一个token是否是点号"""
+        if self.position + 1 < len(self.tokens):
+            next_token = self.tokens[self.position + 1]
+            return next_token.type == TokenType.DOT
+        return False
     
     def _get_default_production(self, nonterminal: str, terminal: str):
         """获取默认的ε产生式"""
@@ -230,8 +247,13 @@ class ExtendedParser:
                     pos += 1
                 
                 # 解析表别名（如果存在）
-                if pos < len(self.tokens) and self.tokens[pos].type == TokenType.IDENTIFIER:
-                    # 表别名
+                if pos < len(self.tokens) and self.tokens[pos].type == TokenType.AS:
+                    pos += 1  # 跳过AS
+                    if pos < len(self.tokens) and self.tokens[pos].type == TokenType.IDENTIFIER:
+                        # 表别名
+                        pos += 1
+                elif pos < len(self.tokens) and self.tokens[pos].type == TokenType.IDENTIFIER:
+                    # 直接的别名（没有AS关键字）
                     pos += 1
                 
                 # 解析JOIN子句
@@ -259,7 +281,57 @@ class ExtendedParser:
         while pos < len(self.tokens) and self.tokens[pos].type != TokenType.FROM:
             token = self.tokens[pos]
             
-            if token.type == TokenType.ASTERISK:
+            # 检查聚合函数
+            if token.type in [TokenType.COUNT, TokenType.SUM, TokenType.AVG, TokenType.MAX, TokenType.MIN]:
+                # 处理聚合函数
+                func_name = token.value.upper()
+                func_node = ASTNode(ASTNodeType.AGGREGATE_FUNCTION, func_name)
+                pos += 1  # 跳过函数名
+                
+                # 跳过左括号
+                if pos < len(self.tokens) and self.tokens[pos].type == TokenType.LEFT_PAREN:
+                    pos += 1
+                    
+                    # 解析聚合函数参数
+                    arg_node = ASTNode(ASTNodeType.AGGREGATE_ARG)
+                    if pos < len(self.tokens):
+                        if self.tokens[pos].type == TokenType.ASTERISK:
+                            # 处理COUNT(*)
+                            arg_child = ASTNode(ASTNodeType.IDENTIFIER, "*")
+                            arg_node.add_child(arg_child)
+                            pos += 1
+                        elif self.tokens[pos].type == TokenType.IDENTIFIER:
+                            # 处理列名
+                            arg_child = ASTNode(ASTNodeType.COLUMN_REF, self.tokens[pos].value)
+                            arg_node.add_child(arg_child)
+                            pos += 1
+                    
+                    func_node.add_child(arg_node)
+                    
+                    # 跳过右括号
+                    if pos < len(self.tokens) and self.tokens[pos].type == TokenType.RIGHT_PAREN:
+                        pos += 1
+                
+                column_list.add_child(func_node)
+                
+                # 检查是否有AS关键字或直接的别名
+                if pos < len(self.tokens):
+                    # 检查是否有AS关键字
+                    if (pos + 1 < len(self.tokens) and 
+                        self.tokens[pos].type == TokenType.AS and
+                        self.tokens[pos + 1].type == TokenType.IDENTIFIER):
+                        # 有AS关键字的别名
+                        alias_node = ASTNode(ASTNodeType.COLUMN_ALIAS, self.tokens[pos + 1].value)
+                        func_node.add_child(alias_node)
+                        pos += 2
+                    elif (self.tokens[pos].type == TokenType.IDENTIFIER and
+                          pos > 0 and self.tokens[pos - 1].type != TokenType.AS and
+                          self.tokens[pos].value.upper() not in ['FROM', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT']):
+                        # 直接的别名（没有AS关键字）
+                        alias_node = ASTNode(ASTNodeType.COLUMN_ALIAS, self.tokens[pos].value)
+                        func_node.add_child(alias_node)
+                        pos += 1
+            elif token.type == TokenType.ASTERISK:
                 col_node = ASTNode(ASTNodeType.IDENTIFIER, "*")
                 column_list.add_child(col_node)
                 pos += 1
@@ -277,42 +349,32 @@ class ExtendedParser:
                     pos += 3  # 跳过表别名、点号和列名
                 else:
                     # 简单的列名
-                    col_node = ASTNode(ASTNodeType.IDENTIFIER, token.value)
+                    col_node = ASTNode(ASTNodeType.COLUMN_REF, token.value)
                     column_list.add_child(col_node)
                     pos += 1
-            elif token.type in [TokenType.COUNT, TokenType.SUM, TokenType.AVG, TokenType.MAX, TokenType.MIN]:
-                # 聚合函数
-                agg_node = ASTNode(ASTNodeType.AGGREGATE_FUNCTION, token.value)
-                column_list.add_child(agg_node)
-                pos += 1
-                
-                # 解析括号和参数
-                if pos < len(self.tokens) and self.tokens[pos].type == TokenType.LEFT_PAREN:
-                    pos += 1  # 跳过左括号
                     
-                    # 创建聚合参数节点
-                    arg_node = ASTNode(ASTNodeType.AGGREGATE_ARG)
-                    agg_node.add_child(arg_node)
-                    
-                    # 解析参数
+                    # 检查是否有AS关键字或直接的别名
                     if pos < len(self.tokens):
-                        if self.tokens[pos].type == TokenType.ASTERISK:
-                            # 处理 * 参数
-                            star_node = ASTNode(ASTNodeType.IDENTIFIER, "*")
-                            arg_node.add_child(star_node)
+                        # 检查是否有AS关键字
+                        if (pos + 1 < len(self.tokens) and 
+                            self.tokens[pos].type == TokenType.AS and
+                            self.tokens[pos + 1].type == TokenType.IDENTIFIER):
+                            # 有AS关键字的别名
+                            alias_node = ASTNode(ASTNodeType.COLUMN_ALIAS, self.tokens[pos + 1].value)
+                            col_node.add_child(alias_node)
+                            pos += 2
+                        elif (self.tokens[pos].type == TokenType.IDENTIFIER and
+                              pos > 0 and self.tokens[pos - 1].type != TokenType.AS and
+                              self.tokens[pos].value.upper() not in ['FROM', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT']):
+                            # 直接的别名（没有AS关键字）
+                            alias_node = ASTNode(ASTNodeType.COLUMN_ALIAS, self.tokens[pos].value)
+                            col_node.add_child(alias_node)
                             pos += 1
-                        elif self.tokens[pos].type == TokenType.IDENTIFIER:
-                            # 处理列名参数
-                            col_ref_node = ASTNode(ASTNodeType.IDENTIFIER, self.tokens[pos].value)
-                            arg_node.add_child(col_ref_node)
-                            pos += 1
-                    
-                    # 跳过右括号
-                    if pos < len(self.tokens) and self.tokens[pos].type == TokenType.RIGHT_PAREN:
-                        pos += 1
             elif token.type == TokenType.COMMA:
+                # 跳过逗号
                 pos += 1
             else:
+                # 其他情况，跳过
                 pos += 1
         
         return pos
@@ -322,12 +384,25 @@ class ExtendedParser:
         while pos < len(self.tokens):
             token = self.tokens[pos]
             
+            # 检查JOIN类型关键字
+            join_type = "INNER"  # 默认内连接
+            if token.type in [TokenType.INNER, TokenType.LEFT, TokenType.RIGHT, TokenType.FULL]:
+                join_type = token.value.upper()
+                # 创建JOIN类型节点
+                join_type_node = ASTNode(ASTNodeType.JOIN_TYPE, join_type)
+                pos += 1
+                token = self.tokens[pos] if pos < len(self.tokens) else None
+            
             # 检查JOIN关键字
-            if token.type == TokenType.JOIN:
+            if token and token.type == TokenType.JOIN:
                 join_node = ASTNode(ASTNodeType.JOIN_CLAUSE)
-                root.add_child(join_node)
+                # 添加JOIN类型节点到JOIN子句
+                if 'join_type_node' in locals():
+                    join_node.add_child(join_type_node)
                 pos += 1
                 
+                # 解析表规范 (表名和别名)
+                # 不使用TABLE_SPEC节点，直接添加表名和别名节点
                 # 解析表名
                 if pos < len(self.tokens) and self.tokens[pos].type == TokenType.IDENTIFIER:
                     table_node = ASTNode(ASTNodeType.TABLE_NAME, self.tokens[pos].value)
@@ -335,9 +410,18 @@ class ExtendedParser:
                     pos += 1
                 
                 # 解析表别名（如果存在）
-                if pos < len(self.tokens) and self.tokens[pos].type == TokenType.IDENTIFIER:
-                    # 表别名
-                    pos += 1
+                if pos < len(self.tokens):
+                    if self.tokens[pos].type == TokenType.AS:
+                        pos += 1  # 跳过AS
+                        if pos < len(self.tokens) and self.tokens[pos].type == TokenType.IDENTIFIER:
+                            alias_node = ASTNode(ASTNodeType.TABLE_ALIAS, self.tokens[pos].value)
+                            join_node.add_child(alias_node)
+                            pos += 1
+                    elif self.tokens[pos].type == TokenType.IDENTIFIER:
+                        # 直接的别名（没有AS关键字）
+                        alias_node = ASTNode(ASTNodeType.TABLE_ALIAS, self.tokens[pos].value)
+                        join_node.add_child(alias_node)
+                        pos += 1
                 
                 # 解析ON子句
                 if pos < len(self.tokens) and self.tokens[pos].type == TokenType.ON:
@@ -346,22 +430,46 @@ class ExtendedParser:
                     join_node.add_child(on_node)
                     
                     # 解析连接条件
-                    condition_start = pos
+                    condition_node = ASTNode(ASTNodeType.JOIN_CONDITION)
+                    on_node.add_child(condition_node)
+                    
+                    # 解析条件中的各个部分
                     while (pos < len(self.tokens) and 
                            self.tokens[pos].type not in [TokenType.WHERE, TokenType.GROUP, 
-                                                        TokenType.ORDER, TokenType.SEMICOLON, TokenType.JOIN]):
-                        pos += 1
-                    
-                    # 构造条件字符串
-                    condition_tokens = self.tokens[condition_start:pos]
-                    condition_str = ' '.join(token.value for token in condition_tokens)
-                    condition_node = ASTNode(ASTNodeType.CONDITION, condition_str)
-                    on_node.add_child(condition_node)
-            elif token.type in [TokenType.INNER, TokenType.LEFT, TokenType.RIGHT, TokenType.FULL]:
-                # JOIN类型，继续处理
-                join_type_node = ASTNode(ASTNodeType.IDENTIFIER, token.value)
-                root.add_child(join_type_node)
-                pos += 1
+                                                        TokenType.ORDER, TokenType.SEMICOLON, TokenType.JOIN,
+                                                        TokenType.INNER, TokenType.LEFT, TokenType.RIGHT, TokenType.FULL]):
+                        current_token = self.tokens[pos]
+                        if current_token.type == TokenType.IDENTIFIER:
+                            # 检查是否是表别名.列名的形式
+                            if (pos + 2 < len(self.tokens) and 
+                                self.tokens[pos + 1].type == TokenType.DOT and
+                                self.tokens[pos + 2].type == TokenType.IDENTIFIER):
+                                # 表别名.列名形式
+                                table_alias = self.tokens[pos].value
+                                column_name = self.tokens[pos + 2].value
+                                col_ref = f"{table_alias}.{column_name}"
+                                col_ref_node = ASTNode(ASTNodeType.COLUMN_REF, col_ref)
+                                condition_node.add_child(col_ref_node)
+                                pos += 3  # 跳过表别名、点号和列名
+                            else:
+                                # 简单标识符
+                                ident_node = ASTNode(ASTNodeType.IDENTIFIER, current_token.value)
+                                condition_node.add_child(ident_node)
+                                pos += 1
+                        elif current_token.type in [TokenType.EQUALS, TokenType.GREATER_THAN, TokenType.LESS_THAN, 
+                                                   TokenType.GREATER_EQUAL, TokenType.LESS_EQUAL, TokenType.NOT_EQUALS]:
+                            # 操作符
+                            op_node = ASTNode(ASTNodeType.IDENTIFIER, current_token.value)
+                            condition_node.add_child(op_node)
+                            pos += 1
+                        else:
+                            # 其他符号
+                            other_node = ASTNode(ASTNodeType.IDENTIFIER, current_token.value)
+                            condition_node.add_child(other_node)
+                            pos += 1
+                
+                # 将JOIN节点添加到根节点
+                root.add_child(join_node)
             else:
                 break
         

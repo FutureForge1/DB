@@ -16,12 +16,13 @@ from src.common.types import (
 class SemanticAnalyzer:
     """语义分析器"""
     
-    def __init__(self):
+    def __init__(self, storage_engine=None):
         """初始化语义分析器"""
         self.symbol_table = SymbolTable()
         self.quadruples = []  # 四元式中间代码列表
         self.temp_counter = 0  # 临时变量计数器
         self.current_scope = "global"  # 当前作用域
+        self.storage_engine = storage_engine  # 存储引擎实例
         
         # 预定义的表结构（模拟数据库schema）
         self.table_schemas = {
@@ -155,13 +156,22 @@ class SemanticAnalyzer:
         select_temp = self.generate_temp_var()
         self.emit_quadruple("SELECT", column_list_result, table_name_result, select_temp)
         
+        # 确定当前数据源
+        current_temp = select_temp
+        
         # 如果有WHERE条件，生成FILTER四元式
         if where_result:
             filter_temp = self.generate_temp_var()
-            self.emit_quadruple("FILTER", select_temp, where_result, filter_temp)
-            return filter_temp
+            self.emit_quadruple("FILTER", current_temp, where_result, filter_temp)
+            current_temp = filter_temp
         
-        return select_temp
+        # 生成PROJECT四元式进行列投影（除非是SELECT *）
+        if column_list_result and column_list_result != "*":
+            project_temp = self.generate_temp_var()
+            self.emit_quadruple("PROJECT", current_temp, column_list_result, project_temp)
+            current_temp = project_temp
+        
+        return current_temp
     
     def _analyze_column_list(self, node: ASTNode) -> str:
         """分析列列表"""
@@ -191,15 +201,36 @@ class SemanticAnalyzer:
         
         table_name = node.value
         
-        # 检查表是否存在
-        if table_name not in self.table_schemas:
+        # 检查表是否存在 - 修正：使用存储引擎动态验证
+        table_exists = False
+        if self.storage_engine:
+            # 使用存储引擎检查表是否存在
+            try:
+                tables = self.storage_engine.list_tables()
+                table_exists = table_name in tables
+            except:
+                # 如果无法访问存储引擎，回退到静态检查
+                table_exists = table_name in self.table_schemas
+        else:
+            # 没有存储引擎时，使用静态检查
+            table_exists = table_name in self.table_schemas
+        
+        if not table_exists:
             raise SemanticError(f"Table '{table_name}' does not exist")
         
         # 添加到符号表
         self.add_symbol(table_name, "table")
         
         print(f"  表 '{table_name}' 验证成功")
-        print(f"  可用列: {', '.join(self.table_schemas[table_name]['columns'])}")
+        if self.storage_engine:
+            try:
+                tables = self.storage_engine.list_tables()
+                print(f"  数据库中的表: {tables}")
+            except:
+                if table_name in self.table_schemas:
+                    print(f"  可用列: {', '.join(self.table_schemas[table_name]['columns'])}")
+        elif table_name in self.table_schemas:
+            print(f"  可用列: {', '.join(self.table_schemas[table_name]['columns'])}")
         
         return table_name
     

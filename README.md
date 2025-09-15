@@ -68,10 +68,6 @@ API接口：RESTful API支持
 一致性协议：Raft或Paxos协议实现
 分布式事务：跨节点事务支持
 
-
-
-
-
 ## 项目结构
 
 ```
@@ -85,7 +81,8 @@ DB/
 │   ├── storage/                 # 存储管理系统
 │   │   ├── page/                # 页管理
 │   │   ├── buffer/              # 缓存管理
-│   │   └── table/               # 表结构管理
+│   │   ├── table/               # 表结构管理
+│   │   └── index/               # 索引管理
 │   ├── execution/               # 执行引擎
 │   └── common/                  # 公共模块
 ├── tests/                       # 测试文件
@@ -106,6 +103,7 @@ DB/
    - 基于页的存储管理
    - 缓存管理器(Buffer Manager)
    - 表结构和记录管理
+   - B+树索引支持
 
 3. **执行引擎**
    - 目标代码解释执行
@@ -113,6 +111,7 @@ DB/
 
 ## 编译运行
 
+### 命令行运行
 ```bash
 # 编译项目
 python -m src.main
@@ -121,20 +120,44 @@ python -m src.main
 python -m src.main examples/sample.sql
 ```
 
+### Web界面运行
+```
+# 启动主数据库测试平台（包含数据持久化展示功能）
+python -m streamlit run streamlit_app.py
+
+# 访问地址: http://localhost:8501
+
+# 启动Tomcat风格的集成管理器（推荐）
+python start_db_manager.py
+
+# 访问地址: http://localhost:8080
+
+# 或启动传统的多页面管理器
+python start_manager.py
+```
+
 ## 支持的SQL语法
 
 目前支持简化的SQL语法：
 - SELECT column_list FROM table_name WHERE condition;
 - 基本的条件表达式
 - 常见的比较运算符
+- DDL语句（CREATE TABLE, DROP TABLE, ALTER TABLE, CREATE INDEX）
+- DML语句（INSERT INTO, UPDATE, DELETE FROM）
+
+## 使用说明
+
+详细使用说明请参见 [SYSTEM_USAGE.md](SYSTEM_USAGE.md) 文件。
 
 ## 开发进度
 
 - [x] 项目结构设计
-- [ ] 词法分析器实现
-- [ ] 语法分析器实现
-- [ ] 语义分析器实现
-- [ ] 代码生成器实现
-- [ ] 存储系统实现
-- [ ] 执行引擎实现
-- [ ] 系统集成与测试
+- [x] 词法分析器实现
+- [x] 语法分析器实现
+- [x] 语义分析器实现
+- [x] 代码生成器实现
+- [x] 存储系统实现
+- [x] 执行引擎实现
+- [x] 系统集成与测试
+- [x] Web界面实现
+- [x] B+树索引实现

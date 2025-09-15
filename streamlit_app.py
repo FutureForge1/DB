@@ -9,6 +9,7 @@ from pathlib import Path
 import traceback
 import pandas as pd
 import json
+import os
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
@@ -253,6 +254,165 @@ def is_complex_query(sql: str) -> bool:
             return True
     return False
 
+def save_database_state(storage):
+    """保存数据库状态"""
+    try:
+        # 刷新所有脏页到磁盘
+        storage.flush_all()
+        st.success("✅ 数据库状态已保存")
+    except Exception as e:
+        st.error(f"保存数据库状态时出错: {e}")
+
+def load_database_state():
+    """加载数据库状态"""
+    try:
+        # 重新初始化存储引擎会自动加载现有数据
+        storage = init_storage()
+        st.success("✅ 数据库状态已加载")
+        return storage
+    except Exception as e:
+        st.error(f"加载数据库状态时出错: {e}")
+        return None
+
+def display_persistent_data_info(storage):
+    """显示数据持久化信息"""
+    st.subheader("💾 数据持久化信息")
+    
+    try:
+        # 显示数据目录信息
+        data_dir = storage.data_dir
+        st.write(f"**数据目录**: {data_dir}")
+        
+        # 显示表信息
+        tables = storage.list_tables()
+        if tables:
+            st.write("**数据表**:")
+            # 使用selectbox来选择要查看的表，避免嵌套expander
+            selected_table = st.selectbox("选择表查看详细信息:", [""] + tables, key="table_selector")
+            
+            # 显示所有表的基本信息
+            table_data = []
+            for table_name in tables:
+                try:
+                    table_info = storage.get_table_info(table_name)
+                    if table_info:
+                        table_data.append({
+                            '表名': table_name,
+                            '记录数': table_info.get('record_count', 0),
+                            '页数': len(table_info.get('pages', [])),
+                            '主键': table_info.get('primary_key', '无')
+                        })
+                    else:
+                        table_data.append({
+                            '表名': table_name,
+                            '记录数': '无法获取',
+                            '页数': '无法获取',
+                            '主键': '无法获取'
+                        })
+                except Exception as e:
+                    table_data.append({
+                        '表名': table_name,
+                        '记录数': f'错误: {e}',
+                        '页数': f'错误: {e}',
+                        '主键': f'错误: {e}'
+                    })
+            
+            if table_data:
+                df_tables = pd.DataFrame(table_data)
+                st.dataframe(df_tables, use_container_width=True)
+            
+            # 如果选择了表，显示该表的详细信息
+            if selected_table and selected_table in tables:
+                st.markdown("---")
+                st.write(f"**表 '{selected_table}' 的详细信息**:")
+                try:
+                    table_info = storage.get_table_info(selected_table)
+                    if table_info:
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.write(f"**记录数**: {table_info.get('record_count', 0)}")
+                        with col2:
+                            st.write(f"**页数**: {len(table_info.get('pages', []))}")
+                        with col3:
+                            st.write(f"**主键**: {table_info.get('primary_key', '无')}")
+                        
+                        # 显示列信息
+                        st.write("**列信息**:")
+                        columns_data = []
+                        for col in table_info.get('columns', []):
+                            columns_data.append({
+                                '列名': col['name'],
+                                '类型': col['column_type'],
+                                '主键': '是' if col.get('is_primary_key', False) else '否',
+                                '唯一': '是' if col.get('is_unique', False) else '否',
+                                '可空': '是' if col.get('nullable', True) else '否'
+                            })
+                        
+                        if columns_data:
+                            df_cols = pd.DataFrame(columns_data)
+                            st.dataframe(df_cols, use_container_width=True)
+                        
+                        # 显示表数据
+                        st.write("**表数据**:")
+                        try:
+                            # 获取表的所有数据
+                            table_data = storage.select(selected_table)
+                            if table_data:
+                                df_data = pd.DataFrame(table_data)
+                                st.dataframe(df_data, use_container_width=True)
+                            else:
+                                st.info("表中暂无数据")
+                        except Exception as e:
+                            st.error(f"获取表数据时出错: {e}")
+                    else:
+                        st.error("无法获取表信息")
+                except Exception as e:
+                    st.error(f"获取表详细信息时出错: {e}")
+        else:
+            st.write("暂无数据表")
+            
+        # 显示索引信息
+        if hasattr(storage, 'index_manager') and storage.index_manager:
+            indexes = storage.index_manager.list_indexes()
+            if indexes:
+                st.write("**索引**:")
+                index_data = []
+                for index_name in indexes:
+                    try:
+                        index = storage.index_manager.get_index(index_name)
+                        if index:
+                            index_data.append({
+                                '索引名': index_name,
+                                '表名': index.table_name,
+                                '列': ', '.join(index.columns),
+                                '唯一性': '是' if index.is_unique else '否'
+                            })
+                        else:
+                            index_data.append({
+                                '索引名': index_name,
+                                '表名': '无法获取',
+                                '列': '无法获取',
+                                '唯一性': '无法获取'
+                            })
+                    except Exception as e:
+                        index_data.append({
+                            '索引名': index_name,
+                            '表名': f'错误: {e}',
+                            '列': f'错误: {e}',
+                            '唯一性': f'错误: {e}'
+                        })
+                
+                if index_data:
+                    df_indexes = pd.DataFrame(index_data)
+                    st.dataframe(df_indexes, use_container_width=True)
+            else:
+                st.write("暂无索引")
+        else:
+            st.write("索引管理器未初始化")
+            
+    except Exception as e:
+        st.error(f"显示数据持久化信息时出错: {e}")
+
 def main():
     """主界面"""
     st.title("🗃️ 数据库系统测试平台")
@@ -280,6 +440,8 @@ def main():
         "创建表": "CREATE TABLE products (id INT PRIMARY KEY, name VARCHAR(100) NOT NULL, price DECIMAL(10,2));",
         "添加列": "ALTER TABLE students ADD COLUMN email VARCHAR(100);",
         "创建索引": "CREATE INDEX idx_student_name ON students (name);",
+        "创建复合索引": "CREATE INDEX idx_student_name_age ON students (name, age);",
+        "创建唯一索引": "CREATE UNIQUE INDEX idx_student_id ON students (id);",
         # 复杂查询示例
         "ORDER BY查询": "SELECT name, age FROM students ORDER BY age DESC;",
         "GROUP BY查询": "SELECT major, COUNT(*) FROM students GROUP BY major;",
@@ -302,6 +464,42 @@ def main():
         st.code("id (INTEGER), name (STRING), age (INTEGER), grade (FLOAT), major (STRING)")
         st.write("**courses表:**")
         st.code("course_id (INTEGER), student_id (INTEGER), course_name (STRING), score (FLOAT)")
+    
+    # 显示索引信息
+    with st.sidebar.expander("🔍 索引信息"):
+        try:
+            # 获取存储引擎中的索引信息
+            if hasattr(storage, 'index_manager') and storage.index_manager:
+                indexes = storage.index_manager.list_indexes()
+                if indexes:
+                    st.write("**现有索引:**")
+                    for index_name in indexes:
+                        index = storage.index_manager.get_index(index_name)
+                        if index:
+                            st.write(f"- {index_name}: {index.table_name}({', '.join(index.columns)})")
+                            st.write(f"  唯一性: {'是' if index.is_unique else '否'}")
+                            st.write(f"  阶数: {index.order}")
+                else:
+                    st.write("暂无索引")
+            else:
+                st.write("索引管理器未初始化")
+        except Exception as e:
+            st.write(f"无法获取索引信息: {e}")
+    
+    # 数据库管理功能
+    with st.sidebar.expander("💾 数据库管理"):
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("保存状态"):
+                save_database_state(storage)
+        with col2:
+            if st.button("重新加载"):
+                storage = load_database_state()
+                st.experimental_rerun()
+    
+    # 数据持久化信息
+    with st.sidebar.expander("🗄️ 数据持久化"):
+        display_persistent_data_info(storage)
     
     # 主界面输入
     sql_input = st.text_area(
@@ -449,6 +647,24 @@ def main():
         - ✅ 分组查询 (GROUP BY)
         - ✅ LIMIT/OFFSET查询
         - ✅ JOIN查询 (INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN)
+        - ✅ 索引支持 (B+树索引、复合索引、唯一索引)
+        
+        ### 🌳 B+树索引特性
+        - ✅ 支持复合键索引 (多列组合索引)
+        - ✅ 支持唯一性约束
+        - ✅ 高效的等值查询和范围查询
+        - ✅ 完整的插入、删除操作
+        
+        ### 🔧 管理工具
+        - [🔍 B+树索引管理器](./streamlit_index_manager.py) - 专门的索引管理界面
+        - [🗄️ 数据库管理系统](./streamlit_database_manager.py) - 数据库状态监控界面
+        - [📊 项目仪表板](./streamlit_project_dashboard.py) - 项目整体架构展示
+        
+        ### 📊 快速导航
+        - [返回主页](./streamlit_app.py)
+        - [查看索引](./streamlit_index_manager.py)
+        - [管理数据库](./streamlit_database_manager.py)
+        - [项目概览](./streamlit_project_dashboard.py)
         """
     )
 

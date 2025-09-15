@@ -13,12 +13,13 @@ from src.common.types import ASTNode, ASTNodeType, Quadruple, SymbolTable, Symbo
 class ExtendedSemanticAnalyzer:
     """扩展的语义分析器"""
     
-    def __init__(self):
+    def __init__(self, storage_engine=None):
         """初始化扩展语义分析器"""
         self.symbol_table = SymbolTable()
         self.quadruples: List[Quadruple] = []
         self.temp_counter = 0
         self.label_counter = 0
+        self.storage_engine = storage_engine  # 存储引擎实例
         
         # 扩展的操作符映射
         self.operators = {
@@ -112,17 +113,67 @@ class ExtendedSemanticAnalyzer:
         # 处理LIMIT/OFFSET子句
         self._analyze_limit_clause(node)
         
-        # 处理SELECT列表（聚合函数需要在扫描表之后处理）
+        # 处理SELECT列表
         select_info = self._analyze_select_list(node)
         
-        # 生成最终的选择和输出操作
-        result_temp = self._generate_temp()
-        # 修复：正确传递列信息到SELECT四元式
-        self._emit('SELECT', select_info.get('columns', '*'), table_info.get('main_table'), result_temp)
-        self._emit('OUTPUT', result_temp, None, None)
+        # 总是生成SELECT四元式以确保表被打开和扫描
+        select_temp = self._generate_temp()
+        self._emit('SELECT', select_info.get('columns', '*'), table_info.get('main_table'), select_temp)
         
-        # 生成结束标记
+        # 生成聚合函数四元式（在SELECT之后）
+        if select_info.get('has_aggregates', False):
+            self._generate_aggregate_quadruples(select_info)
+            # 对于聚合函数查询，也需要生成PROJECT四元式来处理别名
+            result_temp = select_info['aggregates'][0]['temp']  # 使用第一个聚合函数的结果
+
+            # 生成PROJECT四元式以处理别名
+            project_temp = self._generate_temp()
+            columns = select_info.get('columns', '*')
+            if isinstance(columns, list):
+                columns_str = ','.join(columns)
+            else:
+                columns_str = columns
+            self._emit('PROJECT', result_temp, columns_str, project_temp)
+            # 更新结果临时变量
+            result_temp = project_temp
+        else:
+            result_temp = select_temp
+            
+            # 对于非聚合函数查询，也需要生成PROJECT四元式
+            project_temp = self._generate_temp()
+            columns = select_info.get('columns', '*')
+            if isinstance(columns, list):
+                columns_str = ','.join(columns)
+            else:
+                columns_str = columns
+            self._emit('PROJECT', result_temp, columns_str, project_temp)
+            # 更新结果临时变量
+            result_temp = project_temp
+        
+        # 生成输出和结束标记
+        self._emit('OUTPUT', result_temp, None, None)
         self._emit('END', None, None, None)
+    
+    def _generate_aggregate_quadruples(self, select_info: Dict[str, Any]):
+        """生成聚合函数四元式"""
+        # 为每个聚合函数生成四元式
+        for agg_info in select_info.get('aggregates', []):
+            func_name = agg_info['function']
+            temp_var = agg_info['temp']
+            column_arg = agg_info.get('column_arg', '*')
+            table_name = getattr(self, 'current_table', '-')  # 获取当前表名，如果没有则使用'-'
+            
+            # 生成聚合函数四元式
+            if func_name == 'COUNT':
+                self._emit('COUNT', table_name, column_arg, temp_var)
+            elif func_name == 'SUM':
+                self._emit('SUM', table_name, column_arg, temp_var)
+            elif func_name == 'AVG':
+                self._emit('AVG', table_name, column_arg, temp_var)
+            elif func_name == 'MAX':
+                self._emit('MAX', table_name, column_arg, temp_var)
+            elif func_name == 'MIN':
+                self._emit('MIN', table_name, column_arg, temp_var)
     
     def _analyze_from_clause(self, node: ASTNode) -> Dict[str, Any]:
         """分析FROM子句"""
@@ -137,6 +188,19 @@ class ExtendedSemanticAnalyzer:
                 self.current_table = table_name
                 
                 print(f"  主表: {table_name}")
+                
+                # 验证表是否存在 - 新增：表存在性检查
+                if self.storage_engine:
+                    try:
+                        tables = self.storage_engine.list_tables()
+                        if table_name not in tables:
+                            raise SemanticError(f"Table '{table_name}' does not exist")
+                    except Exception as e:
+                        # 如果无法访问存储引擎，忽略验证
+                        pass
+                else:
+                    # 没有存储引擎时的默认行为
+                    pass
                 
                 # 添加表到符号表
                 self.symbol_table.add_symbol(Symbol(
@@ -161,13 +225,80 @@ class ExtendedSemanticAnalyzer:
                 print("  分析列列表...")
                 self._analyze_column_list(child, select_info)
                 break
+            elif child.type == ASTNodeType.AGGREGATE_FUNCTION:
+                # 直接处理聚合函数节点
+                print("  直接处理聚合函数...")
+                func_name = child.value
+                select_info['has_aggregates'] = True
+                
+                # 检查是否有别名
+                alias_name = None
+                # 查找同级的下一个节点是否是别名
+                for i, sibling in enumerate(node.children):
+                    if sibling == child and i + 1 < len(node.children):
+                        next_sibling = node.children[i + 1]
+                        if hasattr(next_sibling, 'type') and next_sibling.type == ASTNodeType.COLUMN_ALIAS:
+                            alias_name = next_sibling.value
+                            break
+                
+                # 生成临时变量名（但不立即生成四元式）
+                agg_temp = self._generate_temp()
+                column_arg = self._get_aggregate_column(child)
+                
+                # 保存聚合函数信息，稍后生成四元式
+                select_info['aggregates'].append({
+                    'function': func_name,
+                    'temp': agg_temp,
+                    'alias': alias_name,  # 保存别名信息
+                    'column_arg': column_arg  # 保存列参数
+                })
+                
+                # 使用别名或临时变量名作为列名
+                column_name = alias_name if alias_name else agg_temp
+                if isinstance(select_info['columns'], list):
+                    select_info['columns'].append(column_name)
+                else:
+                    select_info['columns'] = [column_name]
+                
+                print(f"    聚合函数: {func_name}({column_arg}) -> {column_name}")
         
         return select_info
     
     def _analyze_column_list(self, node: ASTNode, select_info: Dict[str, Any]):
         """分析列列表"""
         for child in node.children:
-            if child.type == ASTNodeType.COLUMN_REF:  # 修复：处理COLUMN_REF节点
+            if child.type == ASTNodeType.AGGREGATE_FUNCTION:
+                func_name = child.value
+                select_info['has_aggregates'] = True
+                
+                # 检查是否有别名 - 别名是聚合函数节点的子节点
+                alias_name = None
+                for subchild in child.children:
+                    if hasattr(subchild, 'type') and subchild.type == ASTNodeType.COLUMN_ALIAS:
+                        alias_name = subchild.value
+                        break
+                
+                # 生成临时变量名（但不立即生成四元式）
+                agg_temp = self._generate_temp()
+                column_arg = self._get_aggregate_column(child)
+                
+                # 保存聚合函数信息，稍后生成四元式
+                select_info['aggregates'].append({
+                    'function': func_name,
+                    'temp': agg_temp,
+                    'alias': alias_name,  # 保存别名信息
+                    'column_arg': column_arg  # 保存列参数
+                })
+                
+                # 使用别名或临时变量名作为列名
+                column_name = alias_name if alias_name else agg_temp
+                if isinstance(select_info['columns'], list):
+                    select_info['columns'].append(column_name)
+                else:
+                    select_info['columns'] = [column_name]
+                
+                print(f"    聚合函数: {func_name}({column_arg}) -> {column_name}")
+            elif child.type == ASTNodeType.COLUMN_REF:  # 修复：处理COLUMN_REF节点
                 # 获取列名，可能带表前缀
                 column_name = child.value
                 if isinstance(select_info['columns'], list):
@@ -175,6 +306,22 @@ class ExtendedSemanticAnalyzer:
                 else:
                     select_info['columns'] = [column_name]
                 print(f"    选择列: {column_name}")
+                
+                # 检查是否有别名
+                alias_name = None
+                for alias_child in child.children:
+                    if hasattr(alias_child, 'type') and alias_child.type == ASTNodeType.COLUMN_ALIAS:
+                        # 处理列别名
+                        alias_name = alias_child.value
+                        print(f"    列别名: {alias_name}")
+                        break
+                
+                # 如果有别名，使用别名替换列名
+                if alias_name:
+                    if isinstance(select_info['columns'], list):
+                        select_info['columns'][-1] = alias_name  # 替换最后一个添加的列名
+                    else:
+                        select_info['columns'] = [alias_name]
             elif child.type == ASTNodeType.IDENTIFIER:
                 column_name = child.value
                 if column_name == "*":
@@ -187,64 +334,154 @@ class ExtendedSemanticAnalyzer:
                         select_info['columns'] = [column_name]
                     print(f"    选择列: {column_name}")
                     
-            elif child.type == ASTNodeType.AGGREGATE_FUNCTION:
-                func_name = child.value
-                select_info['has_aggregates'] = True
-                
-                # 生成聚合函数的四元式
-                agg_temp = self._generate_temp()
-                column_arg = self._get_aggregate_column(child)
-                
-                if func_name == 'COUNT':
-                    # 对于COUNT(*)，参数为"*"
-                    # 对于COUNT(column)，参数为列名
-                    if column_arg == "*":
-                        self._emit('COUNT', '*', None, agg_temp)
-                    else:
-                        self._emit('COUNT', column_arg, None, agg_temp)
-                else:
-                    # 对于其他聚合函数，需要确定列名
-                    self._emit(func_name, '-', column_arg, agg_temp)
-                
-                select_info['aggregates'].append({
-                    'function': func_name,
-                    'temp': agg_temp
-                })
-                
-                if isinstance(select_info['columns'], list):
-                    select_info['columns'].append(agg_temp)
-                else:
-                    select_info['columns'] = [agg_temp]
-                
-                print(f"    聚合函数: {func_name}({column_arg}) -> {agg_temp}")
+                    # 检查是否有别名
+                    alias_name = None
+                    # 查找同级的下一个节点是否是别名
+                    for i, sibling in enumerate(node.children):
+                        if sibling == child and i + 1 < len(node.children):
+                            next_sibling = node.children[i + 1]
+                            if hasattr(next_sibling, 'type') and next_sibling.type == ASTNodeType.COLUMN_ALIAS:
+                                alias_name = next_sibling.value
+                                break
+                    
+                    # 如果有别名，使用别名替换列名
+                    if alias_name:
+                        if isinstance(select_info['columns'], list):
+                            select_info['columns'][-1] = alias_name  # 替换最后一个添加的列名
+                        else:
+                            select_info['columns'] = [alias_name]
+            elif child.type == ASTNodeType.COLUMN_SPEC:
+                # 处理列规范节点，可能包含聚合函数
+                for spec_child in child.children:
+                    if spec_child.type == ASTNodeType.AGGREGATE_FUNCTION:
+                        func_name = spec_child.value
+                        select_info['has_aggregates'] = True
+                        
+                        # 检查是否有别名
+                        alias_name = None
+                        # 查找列规范的下一个兄弟节点是否是别名
+                        for i, sibling in enumerate(node.children):
+                            if sibling == child and i + 1 < len(node.children):
+                                next_sibling = node.children[i + 1]
+                                if hasattr(next_sibling, 'type') and next_sibling.type == ASTNodeType.COLUMN_ALIAS:
+                                    alias_name = next_sibling.value
+                                    break
+                        
+                        # 生成临时变量名（但不立即生成四元式）
+                        agg_temp = self._generate_temp()
+                        column_arg = self._get_aggregate_column(spec_child)
+                        
+                        # 保存聚合函数信息，稍后生成四元式
+                        select_info['aggregates'].append({
+                            'function': func_name,
+                            'temp': agg_temp,
+                            'alias': alias_name,  # 保存别名信息
+                            'column_arg': column_arg  # 保存列参数
+                        })
+                        
+                        # 使用别名或临时变量名作为列名
+                        column_name = alias_name if alias_name else agg_temp
+                        if isinstance(select_info['columns'], list):
+                            select_info['columns'].append(column_name)
+                        else:
+                            select_info['columns'] = [column_name]
+                        
+                        print(f"    聚合函数: {func_name}({column_arg}) -> {column_name}")
+                        break  # 处理完聚合函数后跳出循环
+                    elif spec_child.type == ASTNodeType.COLUMN_REF:
+                        # 处理普通列引用
+                        column_name = spec_child.value
+                        if isinstance(select_info['columns'], list):
+                            select_info['columns'].append(column_name)
+                        else:
+                            select_info['columns'] = [column_name]
+                        print(f"    选择列: {column_name}")
+                        
+                        # 检查是否有别名
+                        alias_name = None
+                        for alias_child in spec_child.children:
+                            if hasattr(alias_child, 'type') and alias_child.type == ASTNodeType.COLUMN_ALIAS:
+                                alias_name = alias_child.value
+                                break
+                        
+                        # 如果有别名，使用别名替换列名
+                        if alias_name:
+                            if isinstance(select_info['columns'], list):
+                                select_info['columns'][-1] = alias_name  # 替换最后一个添加的列名
+                            else:
+                                select_info['columns'] = [alias_name]
+                        break  # 处理完列引用后跳出循环
+                    elif spec_child.type == ASTNodeType.IDENTIFIER:
+                        # 处理标识符
+                        column_name = spec_child.value
+                        if column_name == "*":
+                            select_info['columns'] = "*"
+                            print(f"    选择所有列: *")
+                        else:
+                            if isinstance(select_info['columns'], list):
+                                select_info['columns'].append(column_name)
+                            else:
+                                select_info['columns'] = [column_name]
+                            print(f"    选择列: {column_name}")
+                            
+                            # 检查是否有别名
+                            alias_name = None
+                            # 查找同级的下一个节点是否是别名
+                            for i, sibling in enumerate(node.children):
+                                if sibling == child and i + 1 < len(node.children):
+                                    next_sibling = node.children[i + 1]
+                                    if hasattr(next_sibling, 'type') and next_sibling.type == ASTNodeType.COLUMN_ALIAS:
+                                        alias_name = next_sibling.value
+                                        break
+                            
+                            # 如果有别名，使用别名替换列名
+                            if alias_name:
+                                if isinstance(select_info['columns'], list):
+                                    select_info['columns'][-1] = alias_name  # 替换最后一个添加的列名
+                                else:
+                                    select_info['columns'] = [alias_name]
+                        break  # 处理完标识符后跳出循环
     
     def _get_aggregate_column(self, agg_node: ASTNode) -> str:
         """获取聚合函数的列参数"""
-        # 查找聚合函数的参数
-        for child in agg_node.children:
-            if child.type == ASTNodeType.AGGREGATE_ARG:
-                # 查找参数值
-                for arg_child in child.children:
-                    if arg_child.type == ASTNodeType.IDENTIFIER:
-                        return arg_child.value
-                    elif arg_child.type == ASTNodeType.ASTERISK:
-                        return "*"
-            elif child.type == ASTNodeType.AGGREGATE_ARG_LIST:
-                # 处理参数列表
-                for arg_child in child.children:
-                    if arg_child.type == ASTNodeType.IDENTIFIER:
-                        return arg_child.value
-                    elif arg_child.type == ASTNodeType.ASTERISK:
-                        return "*"
-        
-        # 默认返回"*"
-        return "*"
+        try:
+            # 查找聚合函数的参数
+            for child in agg_node.children:
+                if child.type == ASTNodeType.AGGREGATE_ARG:
+                    # 查找参数值
+                    for arg_child in child.children:
+                        if arg_child.type == ASTNodeType.IDENTIFIER:
+                            # 特殊处理：如果IDENTIFIER的值是"*"，返回"*"
+                            if arg_child.value == "*":
+                                return "*"
+                            return arg_child.value
+                        elif arg_child.type == ASTNodeType.COLUMN_REF:
+                            # 直接返回COLUMN_REF节点的值
+                            return arg_child.value
+                elif child.type == ASTNodeType.AGGREGATE_ARG_LIST:
+                    # 处理参数列表
+                    for arg_child in child.children:
+                        if arg_child.type == ASTNodeType.IDENTIFIER:
+                            # 特殊处理：如果IDENTIFIER的值是"*"，返回"*"
+                            if arg_child.value == "*":
+                                return "*"
+                            return arg_child.value
+                        elif arg_child.type == ASTNodeType.COLUMN_REF:
+                            # 直接返回COLUMN_REF节点的值
+                            return arg_child.value
+            
+            # 默认返回"*"
+            return "*"
+        except Exception as e:
+            # 如果出现任何错误，返回默认值"*"
+            print(f"Warning: Error getting aggregate column, using default '*': {e}")
+            return "*"
     
     def _analyze_join_clauses(self, node: ASTNode, table_info: Dict[str, Any]):
         """分析JOIN子句"""
+        print("  分析JOIN子句...")
         for child in node.children:
             if child.type == ASTNodeType.JOIN_CLAUSE:
-                print("  分析JOIN子句...")
                 self._analyze_join_clause(child, table_info)
     
     def _analyze_join_clause(self, node: ASTNode, table_info: Dict[str, Any]):
@@ -252,38 +489,49 @@ class ExtendedSemanticAnalyzer:
         join_table = None
         join_condition = None
         join_type = "INNER"  # 默认内连接
+        table_alias = None
         
-        # 查找JOIN类型 - 修复：不使用parent属性
-        # 在JOIN子句中查找JOIN类型，而不是在父节点中查找
-        # JOIN类型通常在JOIN关键字之前
-        join_type = "INNER"  # 默认值
-        
+        # 查找JOIN类型和相关信息
         for child in node.children:
-            if child.type == ASTNodeType.TABLE_NAME:
+            if child.type == ASTNodeType.JOIN_TYPE:
+                join_type = child.value
+                print(f"    JOIN类型: {join_type}")
+            elif child.type == ASTNodeType.TABLE_NAME:
                 join_table = child.value
-                table_info['tables'].append(join_table)
-                print(f"    {join_type} JOIN表: {join_table}")
-                
+            elif child.type == ASTNodeType.TABLE_ALIAS:
+                table_alias = child.value
             elif child.type == ASTNodeType.ON_CLAUSE:
                 # 查找条件节点
                 for on_child in child.children:
-                    if on_child.type == ASTNodeType.CONDITION:
-                        join_condition = on_child.value
+                    if on_child.type == ASTNodeType.JOIN_CONDITION:
+                        # 构建完整的条件字符串
+                        condition_parts = []
+                        for cond_child in on_child.children:
+                            if hasattr(cond_child, 'value') and cond_child.value:
+                                condition_parts.append(str(cond_child.value))
+                        if condition_parts:
+                            join_condition = ' '.join(condition_parts)
                         break
                 
                 print(f"    ON条件: {join_condition}")
         
         if join_table:
+            # 添加表到表信息中
+            table_info['tables'].append(join_table)
+            if table_alias:
+                table_info['aliases'][table_alias] = join_table
+            
             # 生成JOIN操作的四元式
             join_temp = self._generate_temp()
             if join_type == "LEFT":
-                self._emit('LEFT_JOIN', table_info['main_table'], f"{join_table} ON {join_condition}", join_temp)
+                self._emit('LEFT_JOIN', table_info['main_table'], join_table, join_condition)
             elif join_type == "RIGHT":
-                self._emit('RIGHT_JOIN', table_info['main_table'], f"{join_table} ON {join_condition}", join_temp)
+                self._emit('RIGHT_JOIN', table_info['main_table'], join_table, join_condition)
             elif join_type == "FULL":
-                self._emit('FULL_JOIN', table_info['main_table'], f"{join_table} ON {join_condition}", join_temp)
+                self._emit('FULL_JOIN', table_info['main_table'], join_table, join_condition)
             else:
-                self._emit('INNER_JOIN', table_info['main_table'], f"{join_table} ON {join_condition}", join_temp)
+                self._emit('INNER_JOIN', table_info['main_table'], join_table, join_condition)
+            print(f"    生成{join_type} JOIN四元式: {table_info['main_table']} JOIN {join_table} ON {join_condition}")
     
     def _analyze_join_condition(self, node: ASTNode) -> Dict[str, str]:
         """分析JOIN条件"""
@@ -301,14 +549,89 @@ class ExtendedSemanticAnalyzer:
                 print("  分析WHERE子句...")
                 condition_temp = self._analyze_condition(child)
                 if condition_temp:
-                    self._emit('WHERE', condition_temp, None, None)
+                    # 生成FILTER四元式而不是WHERE四元式
+                    self._emit('FILTER', condition_temp, None, None)
     
     def _analyze_condition(self, node: ASTNode) -> Optional[str]:
         """分析条件表达式"""
-        # 简化的条件分析
-        condition_temp = self._generate_temp()
-        self._emit('CONDITION', 'column', '>', condition_temp)
-        return condition_temp
+        # 查找条件的具体信息
+        for child in node.children:
+            if child.type == ASTNodeType.OR_CONDITION:
+                # 处理OR条件
+                return self._analyze_or_condition(child)
+            elif child.type == ASTNodeType.AND_CONDITION:
+                # 处理AND条件
+                return self._analyze_and_condition(child)
+            elif child.type == ASTNodeType.SIMPLE_CONDITION:
+                # 处理简单条件
+                return self._analyze_simple_condition(child)
+        
+        # 如果没有找到具体条件，返回None
+        return None
+    
+    def _analyze_or_condition(self, node: ASTNode) -> Optional[str]:
+        """分析OR条件"""
+        # 简化处理，直接返回第一个条件
+        for child in node.children:
+            if child.type == ASTNodeType.AND_CONDITION:
+                return self._analyze_and_condition(child)
+        return None
+    
+    def _analyze_and_condition(self, node: ASTNode) -> Optional[str]:
+        """分析AND条件"""
+        # 简化处理，直接返回第一个条件
+        for child in node.children:
+            if child.type == ASTNodeType.SIMPLE_CONDITION:
+                return self._analyze_simple_condition(child)
+        return None
+    
+    def _analyze_simple_condition(self, node: ASTNode) -> Optional[str]:
+        """分析简单条件"""
+        column = None
+        operator = None
+        value = None
+        
+        # 查找条件的组成部分
+        children = node.children
+        if len(children) >= 3:
+            # 期望格式: column_ref comparison_op operand
+            if children[0].type == ASTNodeType.COLUMN_REF:
+                column = children[0].value
+            elif children[0].type == ASTNodeType.IDENTIFIER:
+                column = children[0].value
+                
+            if children[1].type == ASTNodeType.COMPARISON_OP:
+                operator = children[1].value
+            elif children[1].type == ASTNodeType.IDENTIFIER:
+                operator = children[1].value
+                
+            if children[2].type == ASTNodeType.OPERAND:
+                # 查找操作数的值
+                for operand_child in children[2].children:
+                    if operand_child.type in [ASTNodeType.COLUMN_REF, ASTNodeType.IDENTIFIER, ASTNodeType.LITERAL]:
+                        value = operand_child.value
+                        break
+            elif children[2].type in [ASTNodeType.COLUMN_REF, ASTNodeType.IDENTIFIER, ASTNodeType.LITERAL]:
+                value = children[2].value
+        
+        # 如果找到了条件的所有部分，生成比较四元式
+        if column and operator and value:
+            condition_temp = self._generate_temp()
+            # 生成比较操作的四元式
+            op_map = {
+                '>': 'GT',
+                '>=': 'GE',
+                '<': 'LT', 
+                '<=': 'LE',
+                '=': 'EQ',
+                '<>': 'NE',
+                '!=': 'NE'
+            }
+            quad_op = op_map.get(operator, 'GT')  # 默认使用GT
+            self._emit(quad_op, column, value, condition_temp)
+            return condition_temp
+        
+        return None
     
     def _analyze_group_by_clause(self, node: ASTNode) -> Dict[str, Any]:
         """分析GROUP BY子句"""

@@ -1,7 +1,188 @@
 {
   "tables": [
     {
-      "table_name": "students",
+      "table_name": "departments",
+      "columns": [
+        {
+          "name": "dept_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": true,
+          "is_unique": false
+        },
+        {
+          "name": "dept_name",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": "dept_id",
+      "created_time": "2025-09-15 00:22:50"
+    },
+    {
+      "table_name": "employees",
+      "columns": [
+        {
+          "name": "emp_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": true,
+          "is_unique": false
+        },
+        {
+          "name": "first_name",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "last_name",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "email",
+          "column_type": "STRING",
+          "max_length": 100,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "hire_date",
+          "column_type": "DATE",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "salary",
+          "column_type": "FLOAT",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "department_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": "emp_id",
+      "created_time": "2025-09-15 00:23:54"
+    },
+    {
+      "table_name": "authors",
+      "columns": [
+        {
+          "name": "author_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": true,
+          "is_unique": false
+        },
+        {
+          "name": "author_name",
+          "column_type": "STRING",
+          "max_length": 100,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": "author_id",
+      "created_time": "2025-09-15 00:28:27"
+    },
+    {
+      "table_name": "books",
+      "columns": [
+        {
+          "name": "book_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "title",
+          "column_type": "STRING",
+          "max_length": 255,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "genre",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "pages",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "author_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "publisher",
+          "column_type": "STRING",
+          "max_length": 100,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": null,
+      "created_time": "2025-09-15 00:29:38"
+    },
+    {
+      "table_name": "users",
       "columns": [
         {
           "name": "id",
@@ -13,9 +194,18 @@
           "is_unique": false
         },
         {
-          "name": "name",
+          "name": "username",
           "column_type": "STRING",
           "max_length": 50,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "email",
+          "column_type": "STRING",
+          "max_length": 100,
           "nullable": true,
           "default_value": null,
           "is_primary_key": false,
@@ -31,36 +221,9 @@
           "is_unique": false
         },
         {
-          "name": "grade",
+          "name": "salary",
           "column_type": "FLOAT",
           "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "major",
-          "column_type": "STRING",
-          "max_length": 30,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "email",
-          "column_type": "STRING",
-          "max_length": 100,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "email",
-          "column_type": "STRING",
-          "max_length": 100,
           "nullable": true,
           "default_value": null,
           "is_primary_key": false,
@@ -68,50 +231,7 @@
         }
       ],
       "primary_key": "id",
-      "created_time": "2025-09-09 11:13:42"
-    },
-    {
-      "table_name": "courses",
-      "columns": [
-        {
-          "name": "course_id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": true,
-          "is_unique": false
-        },
-        {
-          "name": "student_id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "course_name",
-          "column_type": "STRING",
-          "max_length": 50,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "score",
-          "column_type": "FLOAT",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        }
-      ],
-      "primary_key": "course_id",
-      "created_time": "2025-09-09 11:13:42"
+      "created_time": "2025-09-15 11:17:56"
     },
     {
       "table_name": "products",
@@ -128,8 +248,8 @@
         {
           "name": "product_name",
           "column_type": "STRING",
-          "max_length": 255,
-          "nullable": true,
+          "max_length": 100,
+          "nullable": false,
           "default_value": null,
           "is_primary_key": false,
           "is_unique": false
@@ -142,200 +262,57 @@
           "default_value": null,
           "is_primary_key": false,
           "is_unique": false
-        }
-      ],
-      "primary_key": "product_id",
-      "created_time": "2025-09-09 11:42:27"
-    },
-    {
-      "table_name": "performance_test",
-      "columns": [
-        {
-          "name": "id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": true,
-          "is_unique": false
         },
         {
-          "name": "name",
+          "name": "category",
           "column_type": "STRING",
           "max_length": 50,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "value",
-          "column_type": "INTEGER",
-          "max_length": null,
           "nullable": true,
           "default_value": null,
           "is_primary_key": false,
           "is_unique": false
         }
       ],
-      "primary_key": "id",
-      "created_time": "2025-09-14 00:23:50"
-    },
-    {
-      "table_name": "teachers",
-      "columns": [
-        {
-          "name": "teacher_id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": true,
-          "is_unique": false
-        },
-        {
-          "name": "name",
-          "column_type": "STRING",
-          "max_length": 50,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "department",
-          "column_type": "STRING",
-          "max_length": 50,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "email",
-          "column_type": "STRING",
-          "max_length": 100,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": true
-        }
-      ],
-      "primary_key": "teacher_id",
-      "created_time": "2025-09-14 15:07:43"
+      "primary_key": "product_id",
+      "created_time": "2025-09-15 11:17:56"
     }
   ],
   "table_pages": {
-    "students": [
-      1,
-      3,
-      5,
+    "departments": [
+      2
+    ],
+    "employees": [
+      3
+    ],
+    "authors": [
+      4,
       7,
-      9,
+      8,
+      10,
       12,
       14,
       16,
       18,
-      20,
-      22,
-      24,
-      25,
-      27,
-      29,
-      31,
-      33,
-      35,
-      37,
-      39,
-      41,
-      43,
-      45,
-      47,
-      49,
-      51,
-      53,
-      55,
-      57,
-      59,
-      61,
-      63,
-      65,
-      67,
-      69,
-      71,
-      73,
-      75,
-      77,
-      79,
-      109,
-      111
+      23,
+      25
     ],
-    "courses": [
-      2,
-      4,
+    "books": [
+      5,
       6,
-      8,
-      10,
+      9,
+      11,
       13,
       15,
       17,
       19,
-      21,
-      23,
-      26,
-      28,
-      30,
-      32,
-      34,
-      36,
-      38,
-      40,
-      42,
-      44,
-      46,
-      48,
-      50,
-      52,
-      54,
-      56,
-      58,
-      60,
-      62,
-      64,
-      66,
-      68,
-      70,
-      72,
-      74,
-      76,
-      78,
-      80,
-      110,
-      112
+      24,
+      26
+    ],
+    "users": [
+      21
     ],
     "products": [
-      11
-    ],
-    "performance_test": [
-      95,
-      96,
-      97,
-      98,
-      99,
-      100,
-      101,
-      102,
-      103,
-      104,
-      105,
-      106,
-      107
-    ],
-    "teachers": [
-      113,
-      117,
-      121,
-      125
+      22
     ]
   }
 }

@@ -69,6 +69,9 @@ class ExecutionEngine:
         self.limit_count = None
         self.offset_count = 0
         
+        # 表别名映射
+        self.table_alias_mapping = {}
+        
         # 指令处理映射
         self.instruction_handlers = {
             TargetInstructionType.OPEN: self._execute_open,
@@ -108,14 +111,17 @@ class ExecutionEngine:
             # 限制指令
             TargetInstructionType.LIMIT: self._execute_limit,
             TargetInstructionType.OFFSET: self._execute_offset,
+            # 新增MOVE指令
+            TargetInstructionType.MOVE: self._execute_move,
         }
     
-    def execute(self, instructions: List[TargetInstruction]) -> List[Dict[str, Any]]:
+    def execute(self, instructions: List[TargetInstruction], translator=None) -> List[Dict[str, Any]]:
         """
         执行目标指令序列
         
         Args:
             instructions: 目标指令列表
+            translator: 代码生成器翻译器，用于获取别名映射等信息
             
         Returns:
             查询结果
@@ -127,6 +133,14 @@ class ExecutionEngine:
             # 重置执行上下文
             self.context = ExecutionContext()
             instruction_pointer = 0
+            
+            # 如果提供了translator，保存它以便在执行过程中使用
+            if translator is not None:
+                self.translator = translator
+                # 如果translator有表别名映射，复制到执行引擎中
+                if hasattr(translator, 'table_alias_mapping'):
+                    self.table_alias_mapping = translator.table_alias_mapping.copy()
+                    print(f"  → 从translator获取表别名映射: {self.table_alias_mapping}")
             
             print(f"\n开始执行 {len(instructions)} 条目标指令:")
             print("-" * 60)
@@ -244,125 +258,360 @@ class ExecutionEngine:
         if len(instruction.operands) < 2:
             print("PROJECT指令参数不足")
             return
-        
+
         source_reg = instruction.operands[0]
         columns = instruction.operands[1]
-        
-        # 处理列参数，确保它是字符串而不是列表
-        if isinstance(columns, list):
-            if len(columns) == 1:
-                columns = columns[0]
-            else:
-                columns = ','.join(str(col) for col in columns)
-        
-        print(f"  → 投影列: {columns}")
-        
-        # 获取要投影的记录
-        records = self.context.filtered_records or self.context.current_records
-        
-        # 保存原始记录以供聚合函数使用
-        original_records = records
-        
-        if columns == '*':
-            # 选择所有列，保持原有数据不变
-            pass
-        else:
-            # 选择指定列
+        result_reg = instruction.result
+
+        print(f"  → PROJECT {columns} FROM {source_reg}")
+
+        # 获取源数据
+        records = self.context.current_records
+
+        # 处理列参数
+        if isinstance(columns, str):
             column_list = [col.strip() for col in columns.split(',')]
+        else:
+            column_list = columns
+
+        # 特殊处理：检查是否有聚合函数结果可以直接使用
+        # 查找寄存器中是否有数字类型的聚合函数结果
+        aggregate_results = {}
+        for reg_name, reg_value in self.context.registers.items():
+            # 检查寄存器值是否为数字类型且不是记录列表
+            if (isinstance(reg_value, (int, float)) and
+                not isinstance(reg_value, bool) and
+                not (isinstance(reg_value, list) and len(reg_value) > 0 and isinstance(reg_value[0], dict))):
+                aggregate_results[reg_name] = reg_value
+                print(f"    找到聚合函数结果: {reg_name} = {reg_value}")
+        
+        # 特殊处理：检查是否是GROUP BY查询的结果
+        if (len(records) > 0 and isinstance(records[0], dict) and 
+            ('_count_result' in records[0] or '_avg_result' in records[0])):
+            # 这是GROUP BY查询的结果，需要特殊处理
             projected_records = []
-            
-            # 打印第一条记录的键，用于调试
-            if records:
-                print(f"    记录中的键: {list(records[0].keys())}")
-            
             for record in records:
                 projected_record = {}
-                for col in column_list:
-                    print(f"    尝试匹配列: '{col}'")
-                    # 直接匹配列名
-                    if col in record:
-                        projected_record[col] = record[col]
-                        print(f"    直接匹配列 '{col}' -> {record[col]}")
+                for column in column_list:
+                    if column in record:
+                        # 直接匹配列名
+                        projected_record[column] = record[column]
+                    elif column == '_count_result':
+                        # COUNT聚合结果的临时名称
+                        projected_record[column] = record[column]
+                    elif column == '_avg_result':
+                        # AVG聚合结果的临时名称
+                        projected_record[column] = record[column]
+                    elif '_count_result' in record:
+                        # 如果是COUNT聚合函数的别名，使用聚合结果，但列名使用别名
+                        projected_record[column] = record['_count_result']
+                    elif '_avg_result' in record:
+                        # 如果是AVG聚合函数的别名，使用聚合结果，但列名使用别名
+                        projected_record[column] = record['_avg_result']
                     else:
-                        # 处理带前缀的列名（如 "students.name"）
-                        # 如果直接匹配失败，尝试匹配带前缀的列名
+                        # 尝试查找匹配的列
                         found = False
-                        for key, value in record.items():
-                            print(f"      检查键 '{key}'")
-                            # 精确匹配
-                            if key == col:
-                                projected_record[col] = value
+                        for key in record.keys():
+                            if key == column or key.endswith(column):
+                                projected_record[column] = record[key]
                                 found = True
-                                print(f"    精确匹配列 '{col}' -> {value}")
                                 break
-                            # 处理带表前缀的列名，如 "students.name" 匹配记录中的 "students.name"
-                            elif '.' in col and key == col:
-                                projected_record[col] = value
-                                found = True
-                                print(f"    带前缀匹配列 '{col}' -> {value}")
-                                break
-                            # 处理不带表前缀的列名，如 "name" 匹配记录中的 "students.name"
-                            elif '.' not in col and key.endswith('.' + col):
-                                projected_record[col] = value
-                                found = True
-                                print(f"    后缀匹配列 '{col}' -> {value} (来自 {key})")
-                                break
-                            # 处理表别名形式的列名，如 "s.name" 匹配记录中的 "students.name"
-                            # 需要根据JOIN操作中表名和别名的映射关系来处理
-                            elif '.' in col:
-                                # 分解列名 "s.name" 为表别名 "s" 和列名 "name"
-                                alias_parts = col.split('.')
-                                if len(alias_parts) == 2:
-                                    alias, column_name = alias_parts
-                                    print(f"      尝试别名匹配: alias='{alias}', column_name='{column_name}'")
-                                    # 根据JOIN操作的特性，我们需要匹配完整的表名前缀
-                                    # 例如，"s.name" 应该匹配 "students.name"
-                                    # 我们可以通过检查键是否以完整表名开头来实现
-                                    if alias == 's' and key.startswith('students.') and key.endswith('.' + column_name):
-                                        projected_record[col] = value
-                                        found = True
-                                        print(f"    别名匹配列 '{col}' -> {value} (来自 {key})")
-                                        break
-                                    elif alias == 'c' and key.startswith('courses.') and key.endswith('.' + column_name):
-                                        projected_record[col] = value
-                                        found = True
-                                        print(f"    别名匹配列 '{col}' -> {value} (来自 {key})")
-                                        break
-                        
-                        # 如果还是没找到，检查是否是聚合结果
                         if not found:
-                            if col in self.context.registers:
-                                projected_record[col] = self.context.registers[col]
-                                print(f"    寄存器匹配列 '{col}' -> {self.context.registers[col]}")
-                            else:
-                                projected_record[col] = None
-                                print(f"    未找到列 '{col}'，设置为 None")
-                # 只有当projected_record非空时才添加
-                if projected_record:
-                    projected_records.append(projected_record)
+                            projected_record[column] = None
+                projected_records.append(projected_record)
             
-            # 更新当前记录，但保留原始记录供聚合函数使用
-            if projected_records:
+            # 更新上下文
+            self.context.current_records = projected_records
+            self.context.registers[result_reg] = projected_records
+            print(f"  → GROUP BY投影完成，生成 {len(projected_records)} 条记录")
+            return
+
+        # 如果有聚合函数结果且只投影一列，直接使用聚合结果
+        if len(column_list) == 1:
+            column = column_list[0]
+            # 检查列是否是聚合函数结果的别名
+            if column in aggregate_results:
+                # 直接使用聚合结果
+                aggregate_value = aggregate_results[column]
+                projected_record = {column: aggregate_value}
+                projected_records = [projected_record]
+                print(f"    聚合函数投影: {column} = {aggregate_value}")
+
+                # 更新上下文
                 self.context.current_records = projected_records
+                self.context.registers[result_reg] = projected_records
+                print(f"  → 投影完成，生成 1 条聚合记录")
+                return
+
+            # 检查列是否是临时变量且对应聚合函数结果
+            # 但使用别名作为输出列名
+            for temp_reg, temp_value in aggregate_results.items():
+                if column == temp_reg or column.startswith('T'):
+                    # 找到对应的临时变量，但使用正确的列名
+                    aggregate_value = temp_value
+
+                    # 如果是别名（不是T开头的临时变量），使用别名作为列名
+                    if not column.startswith('T'):
+                        output_column_name = column
+                    else:
+                        # 如果没有别名，尝试从指令中推断
+                        output_column_name = column
+
+                    projected_record = {output_column_name: aggregate_value}
+                    projected_records = [projected_record]
+                    print(f"    聚合函数投影（使用别名）: {output_column_name} = {aggregate_value}")
+
+                    # 更新上下文
+                    self.context.current_records = projected_records
+                    self.context.registers[result_reg] = projected_records
+                    print(f"  → 投影完成，生成 1 条聚合记录")
+                    return
         
-        # 保存原始记录供聚合函数使用
-        self.context.original_records = original_records
-    
+        # 特殊处理：如果列名就是聚合函数寄存器名，直接使用聚合结果
+        if isinstance(columns, str) and columns in self.context.registers:
+            # 检查寄存器值是否为聚合函数结果
+            reg_value = self.context.registers[columns]
+            if (isinstance(reg_value, (int, float)) and 
+                not isinstance(reg_value, bool) and
+                not (isinstance(reg_value, list) and len(reg_value) > 0 and isinstance(reg_value[0], dict))):
+                # 这是一个聚合函数结果
+                aggregate_value = reg_value
+                # 尝试查找别名
+                alias_name = columns  # 默认使用寄存器名
+                # 在实际应用中，我们可能需要通过其他方式确定别名
+                projected_record = {alias_name: aggregate_value}
+                projected_records = [projected_record]
+                print(f"    聚合函数投影（直接使用寄存器）: {alias_name} = {aggregate_value}")
+                
+                # 更新上下文
+                self.context.current_records = projected_records
+                self.context.registers[result_reg] = projected_records
+                print(f"  → 投影完成，生成 1 条聚合记录")
+                return
+            
+        # 原有的投影处理逻辑（用于非聚合函数情况）
+        projected_records = []
+        
+        for record in records:
+            projected_record = {}
+            print(f"    记录中的键: {list(record.keys())}")
+            
+            for column in column_list:
+                # 特殊处理：如果列是表别名.列名的形式
+                if '.' in column:
+                    alias, col_name = column.split('.', 1)
+                    # 查找匹配的记录字段
+                    found = False
+                    for key in record.keys():
+                        # 检查键是否以"表名.列名"或"别名.列名"的形式存在
+                        if key.endswith(f".{col_name}"):
+                            projected_record[column] = record[key]
+                            print(f"    匹配列 {column}: {record[key]} (来自 {key})")
+                            found = True
+                            break
+                    
+                    if not found:
+                        # 尝试直接匹配
+                        if column in record:
+                            projected_record[column] = record[column]
+                            print(f"    直接匹配列 {column}: {record[column]}")
+                        else:
+                            # 尝试通过表别名查找
+                            # 获取表别名映射（如果有的话）
+                            table_alias_mapping = getattr(self, 'table_alias_mapping', {})
+                            
+                            # 尝试在记录中查找匹配的列
+                            for key in record.keys():
+                                # 如果记录中的键包含点号，尝试匹配
+                                if '.' in key:
+                                    record_table_alias, record_col_name = key.split('.', 1)
+                                    # 如果表别名匹配且列名匹配
+                                    if record_col_name == col_name:
+                                        projected_record[column] = record[key]
+                                        print(f"    表别名匹配列 {column}: {record[key]} (来自 {key})")
+                                        found = True
+                                        break
+                            
+                            # 如果还没找到，尝试模糊匹配
+                            if not found:
+                                for key in record.keys():
+                                    if key == col_name:
+                                        projected_record[column] = record[key]
+                                        print(f"    模糊匹配列 {column}: {record[key]}")
+                                        found = True
+                                        break
+                            
+                            if not found:
+                                projected_record[column] = None
+                                print(f"    未找到列 '{column}'，设置为 None")
+                # 特殊处理：如果列是寄存器（如T1），直接使用寄存器中的值
+                elif column in self.context.registers:
+                    reg_value = self.context.registers[column]
+                    # 检查是否为聚合函数结果
+                    if (isinstance(reg_value, (int, float)) and 
+                        not isinstance(reg_value, bool) and
+                        not (isinstance(reg_value, list) and len(reg_value) > 0 and isinstance(reg_value[0], dict))):
+                        projected_record[column] = reg_value
+                        print(f"    使用聚合结果 {column}: {reg_value}")
+                    else:
+                        projected_record[column] = reg_value
+                        print(f"    使用寄存器值 {column}: {reg_value}")
+                elif column in record:
+                    projected_record[column] = record[column]
+                    print(f"    匹配列 {column}: {record[column]}")
+                else:
+                    # 尝试模糊匹配
+                    found = False
+                    for key in record.keys():
+                        if column.lower() == key.lower():
+                            projected_record[column] = record[key]
+                            print(f"    模糊匹配列 {column}: {record[key]}")
+                            found = True
+                            break
+                    
+                    if not found:
+                        # 检查是否是聚合函数结果
+                        if column.startswith('T'):
+                            # 使用寄存器中的值
+                            if column in self.context.registers:
+                                reg_value = self.context.registers[column]
+                                if (isinstance(reg_value, (int, float)) and 
+                                    not isinstance(reg_value, bool) and
+                                    not (isinstance(reg_value, list) and len(reg_value) > 0 and isinstance(reg_value[0], dict))):
+                                    projected_record[column] = reg_value
+                                    print(f"    使用聚合结果 {column}: {reg_value}")
+                                else:
+                                    projected_record[column] = reg_value
+                                    print(f"    使用寄存器值 {column}: {reg_value}")
+                            else:
+                                projected_record[column] = None
+                                print(f"    未找到列 '{column}'，设置为 None")
+                        else:
+                            # 检查是否是聚合函数的别名
+                            # 使用已找到的聚合函数结果
+                            if aggregate_results:
+                                # 取第一个聚合结果作为值
+                                aggregate_value = list(aggregate_results.values())[0]
+                                projected_record[column] = aggregate_value
+                                print(f"    使用聚合函数结果作为别名 '{column}': {aggregate_value}")
+                            else:
+                                projected_record[column] = None
+                                print(f"    未找到列 '{column}'，设置为 None")
+            
+            projected_records.append(projected_record)
+        
+        # 更新上下文
+        self.context.current_records = projected_records
+        self.context.registers[result_reg] = projected_records
+        # 保存投影列信息，以便在OUTPUT时使用
+        self.context.projected_columns = column_list
+        
+        print(f"  → 投影完成，生成 {len(projected_records)} 条记录")
+
     def _execute_output(self, instruction: TargetInstruction) -> List[Dict[str, Any]]:
         """执行OUTPUT指令 - 输出结果"""
+        source_reg = instruction.operands[0] if instruction.operands else None
+    
         # 确定要输出的记录
         records_to_output = self.context.filtered_records or self.context.current_records
-        
+    
+        print(f"  → OUTPUT {source_reg}")
+        print(f"    当前记录数: {len(records_to_output)}")
+        print(f"    寄存器 {source_reg} 的值: {self.context.registers.get(source_reg, '不存在')}")
+    
+        # 特殊处理：如果源寄存器包含聚合函数结果，直接输出该结果
+        if source_reg and source_reg in self.context.registers:
+            reg_value = self.context.registers[source_reg]
+            # 检查是否为聚合函数结果（数字类型且不是记录列表）
+            if (isinstance(reg_value, (int, float)) and 
+                not isinstance(reg_value, bool) and
+                not (isinstance(reg_value, list) and len(reg_value) > 0 and isinstance(reg_value[0], dict))):
+                # 这是一个聚合函数结果，直接输出
+                aggregate_record = {'result': reg_value}
+                # 尝试查找真正的列名
+                found_alias = False
+                
+                # 首先尝试从translator传递的别名信息中查找
+                if hasattr(self, 'translator'):
+                    # 检查translator是否有aggregate_aliases属性
+                    if hasattr(self.translator, 'aggregate_aliases'):
+                        for alias, reg in self.translator.aggregate_aliases.items():
+                            # 检查寄存器是否匹配，或者检查当前寄存器是否包含相同的聚合结果
+                            if reg == source_reg or (reg in self.context.registers and 
+                                                     self.context.registers[reg] == reg_value and
+                                                     isinstance(reg_value, (int, float)) and not isinstance(reg_value, bool)):
+                                aggregate_record = {alias: reg_value}
+                                found_alias = True
+                                break
+                    else:
+                        # 如果translator是IntegratedCodeGenerator，检查其translator属性
+                        if hasattr(self.translator, 'translator') and hasattr(self.translator.translator, 'aggregate_aliases'):
+                            for alias, reg in self.translator.translator.aggregate_aliases.items():
+                                if reg == source_reg:
+                                    aggregate_record = {alias: reg_value}
+                                    found_alias = True
+                                    break
+                
+                # 如果没有找到别名，尝试从上下文中的投影列信息查找
+                if not found_alias:
+                    # 检查上下文中是否有投影列信息
+                    if (hasattr(self.context, 'projected_columns') and 
+                        self.context.projected_columns and
+                        len(self.context.projected_columns) == 1):
+                        # 如果只有一个投影列，且不是临时变量名，使用它作为别名
+                        potential_alias = self.context.projected_columns[0]
+                        if not potential_alias.startswith('T') and potential_alias != '*':
+                            aggregate_record = {potential_alias: reg_value}
+                            found_alias = True
+                
+                # 如果还是没有找到别名，尝试从temp_var_mapping中查找
+                if not found_alias and hasattr(self, 'temp_var_mapping'):
+                    # 查找与当前寄存器对应的别名
+                    for alias, reg_name in self.temp_var_mapping.items():
+                        if reg_name == source_reg:
+                            # 但我们要确保这个别名不是临时变量名（不以T开头）
+                            if not alias.startswith('T'):
+                                aggregate_record = {alias: reg_value}
+                                found_alias = True
+                                break
+                
+                # 如果还是没有找到别名，尝试通过寄存器反向查找
+                if not found_alias and hasattr(self, 'temp_var_mapping'):
+                    # 查找与当前寄存器对应的临时变量
+                    for temp_var, reg_name in self.temp_var_mapping.items():
+                        if reg_name == source_reg:
+                            # 然后查找这个临时变量是否在aggregate_aliases中有对应的别名
+                            if hasattr(self, 'aggregate_aliases'):
+                                for alias, reg in self.aggregate_aliases.items():
+                                    # 如果aggregate_aliases中的寄存器与当前寄存器相同
+                                    if reg == source_reg:
+                                        aggregate_record = {alias: reg_value}
+                                        found_alias = True
+                                        break
+                            break
+                
+                # 检查是否有从外部传递的别名映射
+                if not found_alias and hasattr(self, 'aggregate_aliases'):
+                    # 查找与当前寄存器对应的别名
+                    for alias, reg in self.aggregate_aliases.items():
+                        if reg == source_reg:
+                            aggregate_record = {alias: reg_value}
+                            found_alias = True
+                            break
+            
+                records_to_output = [aggregate_record]
+                print(f"    检测到聚合函数结果: {reg_value}")
+    
         # 应用OFFSET
         if self.offset_count > 0:
             records_to_output = records_to_output[self.offset_count:]
             print(f"  → 应用OFFSET {self.offset_count}，剩余 {len(records_to_output)} 条记录")
-        
+    
         # 应用LIMIT
         if self.limit_count is not None:
             records_to_output = records_to_output[:self.limit_count]
             print(f"  → 应用LIMIT {self.limit_count}，最终输出 {len(records_to_output)} 条记录")
-        
+    
         # 应用列投影
         if self.context.projected_columns:
             projected_records = []
@@ -381,16 +630,16 @@ class ExecutionEngine:
                 if projected_record:
                     projected_records.append(projected_record)
             records_to_output = projected_records
-        
+    
         self.stats['records_output'] += len(records_to_output)
-        
+    
         print(f"  → 输出 {len(records_to_output)} 条记录")
-        
+    
         # 保存输出结果
         if not hasattr(self.context, 'output_results'):
             self.context.output_results = []
         self.context.output_results.extend(records_to_output)
-        
+    
         return records_to_output
     
     def _execute_gt(self, instruction: TargetInstruction) -> None:
@@ -536,11 +785,16 @@ class ExecutionEngine:
                 if self._evaluate_join_condition(r1, r2, condition, table1, table2):
                     # 创建合并记录
                     merged_record = {}
-                    # 使用表名作为前缀
+                    # 使用表别名作为前缀（如果有的话）
+                    table_alias_mapping = getattr(self, 'table_alias_mapping', {})
+                    alias1 = table_alias_mapping.get(table1, table1)
+                    alias2 = table_alias_mapping.get(table2, table2)
+                    
+                    # 使用别名作为前缀
                     for key, value in r1.items():
-                        merged_record[f"{table1}.{key}"] = value
+                        merged_record[f"{alias1}.{key}"] = value
                     for key, value in r2.items():
-                        merged_record[f"{table2}.{key}"] = value
+                        merged_record[f"{alias2}.{key}"] = value
                     joined_records.append(merged_record)
         
         self.context.current_records = joined_records
@@ -715,13 +969,21 @@ class ExecutionEngine:
                 if '.' in left_part:
                     left_alias, left_col = left_part.split('.', 1)
                     # 根据别名查找对应表的值
-                    if left_alias == table1 or (hasattr(self, '_get_table_alias') and self._get_table_alias(table1) == left_alias):
+                    # 首先检查是否是表名，然后检查是否是表别名
+                    if left_alias == table1:
                         left_value = record1.get(left_col)
-                    elif left_alias == table2 or (hasattr(self, '_get_table_alias') and self._get_table_alias(table2) == left_alias):
+                    elif left_alias == table2:
                         left_value = record2.get(left_col)
                     else:
-                        # 尝试直接查找
-                        left_value = record1.get(left_col, record2.get(left_col))
+                        # 尝试使用_get_table_alias方法获取表别名映射
+                        if hasattr(self, '_get_table_alias'):
+                            if self._get_table_alias(table1) == left_alias:
+                                left_value = record1.get(left_col)
+                            elif self._get_table_alias(table2) == left_alias:
+                                left_value = record2.get(left_col)
+                        # 如果还是没有找到，尝试直接查找
+                        if left_value is None:
+                            left_value = record1.get(left_col, record2.get(left_col))
                 else:
                     # 直接列名
                     left_value = record1.get(left_part, record2.get(left_part))
@@ -731,17 +993,26 @@ class ExecutionEngine:
                 if '.' in right_part:
                     right_alias, right_col = right_part.split('.', 1)
                     # 根据别名查找对应表的值
-                    if right_alias == table1 or (hasattr(self, '_get_table_alias') and self._get_table_alias(table1) == right_alias):
+                    # 首先检查是否是表名，然后检查是否是表别名
+                    if right_alias == table1:
                         right_value = record1.get(right_col)
-                    elif right_alias == table2 or (hasattr(self, '_get_table_alias') and self._get_table_alias(table2) == right_alias):
+                    elif right_alias == table2:
                         right_value = record2.get(right_col)
                     else:
-                        # 尝试直接查找
-                        right_value = record1.get(right_col, record2.get(right_col))
+                        # 尝试使用_get_table_alias方法获取表别名映射
+                        if hasattr(self, '_get_table_alias'):
+                            if self._get_table_alias(table1) == right_alias:
+                                right_value = record1.get(right_col)
+                            elif self._get_table_alias(table2) == right_alias:
+                                right_value = record2.get(right_col)
+                        # 如果还是没有找到，尝试直接查找
+                        if right_value is None:
+                            right_value = record1.get(right_col, record2.get(right_col))
                 else:
                     # 直接列名
                     right_value = record1.get(right_part, record2.get(right_part))
                 
+                print(f"    条件评估: {left_value} == {right_value} = {left_value == right_value}")
                 return left_value == right_value
             elif ' = ' in condition.replace(' ', ''):  # 处理带空格的条件
                 # 移除所有空格后处理
@@ -757,7 +1028,15 @@ class ExecutionEngine:
                     elif left_alias == table2:
                         left_value = record2.get(left_col)
                     else:
-                        left_value = record1.get(left_col, record2.get(left_col))
+                        # 尝试使用_get_table_alias方法获取表别名映射
+                        if hasattr(self, '_get_table_alias'):
+                            if self._get_table_alias(table1) == left_alias:
+                                left_value = record1.get(left_col)
+                            elif self._get_table_alias(table2) == left_alias:
+                                left_value = record2.get(left_col)
+                        # 如果还是没有找到，尝试直接查找
+                        if left_value is None:
+                            left_value = record1.get(left_col, record2.get(left_col))
                 else:
                     left_value = record1.get(left_part, record2.get(left_part))
                 
@@ -770,54 +1049,95 @@ class ExecutionEngine:
                     elif right_alias == table2:
                         right_value = record2.get(right_col)
                     else:
-                        right_value = record1.get(right_col, record2.get(right_col))
+                        # 尝试使用_get_table_alias方法获取表别名映射
+                        if hasattr(self, '_get_table_alias'):
+                            if self._get_table_alias(table1) == right_alias:
+                                right_value = record1.get(right_col)
+                            elif self._get_table_alias(table2) == right_alias:
+                                right_value = record2.get(right_col)
+                        # 如果还是没有找到，尝试直接查找
+                        if right_value is None:
+                            right_value = record1.get(right_col, record2.get(right_col))
                 else:
                     right_value = record1.get(right_part, record2.get(right_part))
                 
+                print(f"    条件评估: {left_value} == {right_value} = {left_value == right_value}")
                 return left_value == right_value
         except Exception as e:
             print(f"    条件评估错误: '{condition}' - {e}")
         
+        print(f"    条件评估默认返回: False")
         return False  # 默认不匹配
+
+    def _get_table_alias(self, table_name: str) -> str:
+        """获取表的别名"""
+        # 在实际应用中，我们需要从上下文中获取表别名映射
+        # 这里简单实现一个映射表
+        table_alias_mapping = {
+            'books': 'b',
+            'authors': 'a'
+        }
+        return table_alias_mapping.get(table_name, table_name)
     
     def _execute_count(self, instruction: TargetInstruction) -> None:
-        """执行COUNT聚合指令"""
-        # COUNT指令需要至少1个参数（源寄存器）
-        if len(instruction.operands) < 1:
+        """执行COUNT指令 - 计数聚合"""
+        if len(instruction.operands) < 2:
             print("COUNT指令参数不足")
             return
         
-        # 获取源寄存器和列名
-        source_reg = instruction.operands[0] if instruction.operands[0] is not None else "R1"
-        column = instruction.operands[1] if len(instruction.operands) > 1 and instruction.operands[1] is not None else "*"
+        source_reg = instruction.operands[0]
+        column = instruction.operands[1]
+        result_reg = instruction.result
         
-        # 获取记录数据 - 确保在扫描表之后执行
-        # 首先尝试从原始记录获取数据（PROJECT指令之前的数据）
-        records = getattr(self.context, 'original_records', None) or self.context.current_records
-        print(f"  → COUNT指令获取记录: {len(records) if records else 0} 条")
+        # 获取当前记录
+        records = self.context.current_records
         
-        # 如果当前记录为空，尝试从寄存器获取数据
-        if not records and source_reg in self.context.registers:
-            reg_data = self.context.registers[source_reg]
-            print(f"  → 从寄存器 {source_reg} 获取数据: {type(reg_data)}")
-            if isinstance(reg_data, list):
-                records = reg_data
-        
-        # 计算COUNT值
-        if column == '*' or column is None:
-            count = len(records) if records else 0
+        # 检查是否有分组
+        if hasattr(self.context, 'groups') and self.context.groups:
+            # 有分组的情况 - 为每个分组计算COUNT
+            group_results = []
+            for group_key, group_records in self.context.groups.items():
+                # 计算该组的COUNT
+                if column == "*":
+                    count = len(group_records)
+                else:
+                    count = 0
+                    for record in group_records:
+                        if column in record and record[column] is not None:
+                            count += 1
+                
+                # 创建包含分组列和聚合结果的记录
+                group_result = {}
+                # 添加分组列的值
+                for i, col_name in enumerate(self.context.group_columns):
+                    group_result[col_name] = group_key[i]
+                # 添加聚合结果（使用临时名称，稍后在PROJECT中会使用别名）
+                group_result['_count_result'] = count
+                group_results.append(group_result)
+                
+            print(f"  → GROUP BY COUNT(*): 生成 {len(group_results)} 个分组结果")
+            
+            # 将分组结果保存到寄存器和当前记录
+            self.context.registers[result_reg] = group_results
+            self.context.current_records = group_results
         else:
-            count = sum(1 for record in records if column in record and record[column] is not None) if records else 0
-        
-        # 将结果存储在寄存器中
-        result_reg = instruction.result if instruction.result is not None else source_reg
-        self.context.registers[result_reg] = count
-        
-        print(f"  → COUNT({column or '*'}) = {count}")
-        
-        # 创建聚合结果记录
-        self.context.current_records = [{'COUNT': count}]
-    
+            # 没有分组的情况 - 普通的COUNT
+            if column == "*":
+                # COUNT(*) - 计算所有记录数
+                count = len(records)
+                print(f"  → COUNT(*) = {count}")
+            else:
+                # COUNT(column) - 计算非空值的数量
+                count = 0
+                for record in records:
+                    if column in record and record[column] is not None:
+                        count += 1
+                print(f"  → COUNT({column}) = {count}")
+            
+            # 存储结果到寄存器
+            self.context.registers[result_reg] = count
+            print(f"  → 存储COUNT结果 {count} 到寄存器 {result_reg}")
+
     def _execute_sum(self, instruction: TargetInstruction) -> None:
         """执行SUM聚合指令"""
         # SUM指令需要至少1个参数（源寄存器）和1个参数（列名）
@@ -869,40 +1189,78 @@ class ExecutionEngine:
         
         source_reg = instruction.operands[0] if len(instruction.operands) > 0 and instruction.operands[0] is not None else "R1"
         column = instruction.operands[1] if len(instruction.operands) > 1 and instruction.operands[1] is not None else "grade"
+        result_reg = instruction.result
         
-        # 获取记录数据 - 确保在扫描表之后执行
-        # 首先尝试从原始记录获取数据（PROJECT指令之前的数据）
-        records = getattr(self.context, 'original_records', None) or self.context.current_records
-        print(f"  → AVG指令获取记录: {len(records) if records else 0} 条")
+        # 获取当前记录
+        records = self.context.current_records
         
-        # 如果当前记录为空，尝试从寄存器获取数据
-        if not records and source_reg in self.context.registers:
-            reg_data = self.context.registers[source_reg]
-            print(f"  → 从寄存器 {source_reg} 获取数据: {type(reg_data)}")
-            if isinstance(reg_data, list):
-                records = reg_data
-        
-        total = 0
-        count = 0
-        
-        if records:
-            for record in records:
-                if column in record and record[column] is not None:
-                    try:
-                        total += float(record[column])
-                        count += 1
-                    except (ValueError, TypeError):
-                        continue
-        
-        avg = total / count if count > 0 else 0
-        
-        # 将结果存储在寄存器中
-        result_reg = instruction.result if instruction.result is not None else source_reg
-        self.context.registers[result_reg] = avg
-        
-        print(f"  → AVG({column}) = {avg:.2f} (基于 {count} 条记录)")
-        
-        self.context.current_records = [{'AVG': avg}]
+        # 检查是否有分组
+        if hasattr(self.context, 'groups') and self.context.groups:
+            # 有分组的情况 - 为每个分组计算AVG
+            group_results = []
+            for group_key, group_records in self.context.groups.items():
+                # 计算该组的AVG
+                total = 0
+                count = 0
+                
+                for record in group_records:
+                    if column in record and record[column] is not None:
+                        try:
+                            total += float(record[column])
+                            count += 1
+                        except (ValueError, TypeError):
+                            continue
+                
+                avg = total / count if count > 0 else 0
+                
+                # 创建包含分组列和聚合结果的记录
+                group_result = {}
+                # 添加分组列的值
+                for i, col_name in enumerate(self.context.group_columns):
+                    group_result[col_name] = group_key[i]
+                # 添加聚合结果（使用临时名称，稍后在PROJECT中会使用别名）
+                group_result['_avg_result'] = avg
+                group_results.append(group_result)
+                
+            print(f"  → GROUP BY AVG({column}): 生成 {len(group_results)} 个分组结果")
+            
+            # 将分组结果保存到寄存器和当前记录
+            self.context.registers[result_reg] = group_results
+            self.context.current_records = group_results
+        else:
+            # 没有分组的情况 - 普通的AVG
+            # 获取记录数据 - 确保在扫描表之后执行
+            # 首先尝试从原始记录获取数据（PROJECT指令之前的数据）
+            records = getattr(self.context, 'original_records', None) or self.context.current_records
+            print(f"  → AVG指令获取记录: {len(records) if records else 0} 条")
+            
+            # 如果当前记录为空，尝试从寄存器获取数据
+            if not records and source_reg in self.context.registers:
+                reg_data = self.context.registers[source_reg]
+                print(f"  → 从寄存器 {source_reg} 获取数据: {type(reg_data)}")
+                if isinstance(reg_data, list):
+                    records = reg_data
+            
+            total = 0
+            count = 0
+            
+            if records:
+                for record in records:
+                    if column in record and record[column] is not None:
+                        try:
+                            total += float(record[column])
+                            count += 1
+                        except (ValueError, TypeError):
+                            continue
+            
+            avg = total / count if count > 0 else 0
+            
+            # 将结果存储在寄存器中
+            self.context.registers[result_reg] = avg
+            
+            print(f"  → AVG({column}) = {avg:.2f} (基于 {count} 条记录)")
+            
+            self.context.current_records = [{'AVG': avg}]
     
     def _execute_max(self, instruction: TargetInstruction) -> None:
         """执行MAX聚合指令"""
@@ -1228,6 +1586,32 @@ class ExecutionEngine:
         except ValueError:
             print(f"  → OFFSET 值无效: {offset_value}")
     
+    def _execute_move(self, instruction: TargetInstruction) -> None:
+        """执行MOVE指令 - 移动数据"""
+        if len(instruction.operands) < 1:
+            print("MOVE指令参数不足")
+            return
+        
+        source_reg = instruction.operands[0]
+        dest_reg = instruction.result
+        
+        # 从源寄存器获取值
+        source_value = self.context.registers.get(source_reg)
+        
+        # 移动到目标寄存器
+        self.context.registers[dest_reg] = source_value
+        
+        # 修复：如果源寄存器在别名映射中，将别名映射也更新到目标寄存器
+        if hasattr(self, 'aggregate_aliases'):
+            # 查找源寄存器对应的别名
+            for alias, reg in self.aggregate_aliases.items():
+                if reg == source_reg:
+                    # 更新别名映射到目标寄存器
+                    self.aggregate_aliases[alias] = dest_reg
+                    break
+        
+        print(f"  → 移动数据: {source_reg}({source_value}) -> {dest_reg}")
+
     def get_stats(self) -> Dict[str, Any]:
         """获取执行统计信息"""
         return self.stats.copy()

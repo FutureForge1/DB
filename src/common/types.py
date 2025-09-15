@@ -207,7 +207,9 @@ class ASTNodeType(Enum):
     TABLE_REF = "TABLE_REF"
     TABLE_ALIAS = "TABLE_ALIAS"
     COLUMN_REF = "COLUMN_REF"
+    COLUMN_ALIAS = "COLUMN_ALIAS"  # 列别名
     AGGREGATE_ARG_LIST = "AGGREGATE_ARG_LIST"
+    JOIN_CONDITION = "JOIN_CONDITION"  # 添加JOIN条件节点类型
 
 # 抽象语法树节点
 @dataclass

@@ -110,7 +110,8 @@ class StorageEngine:
     
     def select(self, table_name: str, 
               columns: Optional[List[str]] = None,
-              where: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+              where: Optional[Dict[str, Any]] = None,
+              limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         查询记录
         
@@ -118,6 +119,7 @@ class StorageEngine:
             table_name: 表名
             columns: 要查询的列，None表示所有列
             where: 查询条件
+            limit: 限制返回记录数
             
         Returns:
             查询结果列表
@@ -126,9 +128,15 @@ class StorageEngine:
         
         # 检查是否有可用的索引可以加速查询
         if where and self._can_use_index(table_name, where):
-            return self._select_with_index(table_name, columns, where)
+            results = self._select_with_index(table_name, columns, where)
         else:
-            return self.table_manager.select_records(table_name, where, columns)
+            results = self.table_manager.select_records(table_name, where, columns)
+        
+        # 应用limit限制
+        if limit is not None and results:
+            results = results[:limit]
+            
+        return results
     
     def _can_use_index(self, table_name: str, where: Dict[str, Any]) -> bool:
         """检查是否可以使用索引加速查询"""
@@ -226,7 +234,7 @@ class StorageEngine:
             print(f"Error adding column: {e}")
             return False
     
-    def create_index(self, index_name: str, table_name: str, columns: List[str]) -> bool:
+    def create_index(self, index_name: str, table_name: str, columns: List[str], is_unique: bool = False) -> bool:
         """
         创建索引
         
@@ -234,12 +242,13 @@ class StorageEngine:
             index_name: 索引名
             table_name: 表名
             columns: 列名列表
+            is_unique: 是否唯一索引
             
         Returns:
             是否创建成功
         """
         # 首先尝试创建B+树索引
-        if self.index_manager.create_index(index_name, table_name, columns):
+        if self.index_manager.create_index(index_name, table_name, columns, is_unique):
             print(f"  ✓ B+树索引 '{index_name}' 创建成功")
             return True
         

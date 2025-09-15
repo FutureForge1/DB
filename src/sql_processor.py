@@ -129,10 +129,7 @@ class SQLProcessor:
             if sql_type == "SELECT":
                 # SELECT查询需要目标代码生成和执行
                 # 根据复杂性选择代码生成器
-                if is_complex:
-                    translator = IntegratedCodeGenerator()
-                else:
-                    translator = QuadrupleTranslator()
+                translator = IntegratedCodeGenerator()
                     
                 target_instructions = translator.generate_target_code(quadruples)
                 results = self.execution_engine.execute(target_instructions)
@@ -185,380 +182,236 @@ class SQLProcessor:
         
         return results
     
-    def _execute_create_table(self, quad) -> Dict[str, Any]:
-        """执行CREATE TABLE操作"""
-        table_name = quad.arg1
+    def _execute_create_table(self, quad: Any) -> Dict[str, Any]:
+        """
+        执行CREATE TABLE操作
         
+        Args:
+            quad: CREATE_TABLE四元式
+            
+        Returns:
+            执行结果
+        """
         try:
-            # 解析列信息
+            table_name = quad.arg1
+            # 解析列定义
             import ast
-            columns_info = ast.literal_eval(quad.arg2)
+            columns = ast.literal_eval(quad.arg2)
             
-            # 转换为存储引擎需要的格式
-            columns = []
-            for col_info in columns_info:
-                column = {
-                    'name': col_info['name'],
-                    'type': self._map_data_type(col_info['type']),
-                    'primary_key': 'PRIMARY_KEY' in col_info.get('constraints', []),
-                    'not_null': 'NOT_NULL' in col_info.get('constraints', []),
-                    'unique': 'UNIQUE' in col_info.get('constraints', [])
-                }
-                
-                # 处理VARCHAR类型的长度
-                if col_info['type'].upper().startswith('VARCHAR'):
-                    # 提取长度信息
-                    import re
-                    match = re.search(r'VARCHAR\((\d+)\)', col_info['type'].upper())
-                    if match:
-                        column['max_length'] = int(match.group(1))
-                
-                # 处理DECIMAL类型的精度
-                elif col_info['type'].upper().startswith('DECIMAL'):
-                    # 提取精度和标度信息
-                    import re
-                    match = re.search(r'DECIMAL\((\d+),(\d+)\)', col_info['type'].upper())
-                    if match:
-                        column['max_length'] = int(match.group(1))  # 使用max_length存储精度
-                        # 标度信息暂时忽略
-                
-                columns.append(column)
+            # 调用存储引擎创建表
+            success = self.storage_engine.create_table(table_name, columns)
             
-            # 创建表
-            self.storage_engine.create_table(table_name, columns)
-            
-            return {
-                "operation": "CREATE_TABLE",
-                "table_name": table_name,
-                "columns_count": len(columns),
-                "status": "success",
-                "message": f"数据表 '{table_name}' 创建成功"
-            }
-            
+            if success:
+                return {"message": f"Table '{table_name}' created successfully"}
+            else:
+                return {"error": f"Failed to create table '{table_name}'"}
         except Exception as e:
-            return {
-                "operation": "CREATE_TABLE",
-                "table_name": table_name,
-                "status": "error",
-                "message": str(e)
-            }
+            return {"error": f"Error creating table: {str(e)}"}
     
-    def _execute_drop_table(self, quad) -> Dict[str, Any]:
-        """执行DROP TABLE操作"""
-        table_name = quad.arg1
+    def _execute_drop_table(self, quad: Any) -> Dict[str, Any]:
+        """
+        执行DROP TABLE操作
         
+        Args:
+            quad: DROP_TABLE四元式
+            
+        Returns:
+            执行结果
+        """
         try:
-            self.storage_engine.drop_table(table_name)
-            return {
-                "operation": "DROP_TABLE",
-                "table_name": table_name,
-                "status": "success",
-                "message": f"数据表 '{table_name}' 删除成功"
-            }
+            table_name = quad.arg1
+            # 调用存储引擎删除表
+            success = self.storage_engine.drop_table(table_name)
+            
+            if success:
+                return {"message": f"Table '{table_name}' dropped successfully"}
+            else:
+                return {"error": f"Failed to drop table '{table_name}'"}
         except Exception as e:
-            return {
-                "operation": "DROP_TABLE",
-                "table_name": table_name,
-                "status": "error",
-                "message": str(e)
-            }
+            return {"error": f"Error dropping table: {str(e)}"}
     
-    def _execute_alter_table(self, quad) -> Dict[str, Any]:
-        """执行ALTER TABLE操作"""
-        table_name = quad.arg1
+    def _execute_alter_table(self, quad: Any) -> Dict[str, Any]:
+        """
+        执行ALTER TABLE操作
         
+        Args:
+            quad: ALTER_TABLE_ADD四元式
+            
+        Returns:
+            执行结果
+        """
         try:
-            # 解析列信息
+            table_name = quad.arg1
+            # 解析列定义
             import ast
             column_info = ast.literal_eval(quad.arg2)
             
-            # 转换为存储引擎需要的格式
-            column_def = {
-                'name': column_info['name'],
-                'type': self._map_data_type(column_info['type']),
-                'nullable': not column_info.get('not_null', False),
-                'primary_key': 'PRIMARY_KEY' in column_info.get('constraints', []),
-                'unique': 'UNIQUE' in column_info.get('constraints', [])
-            }
-            
-            # 处理VARCHAR类型的长度
-            if column_info['type'].upper().startswith('VARCHAR'):
-                # 提取长度信息
-                import re
-                match = re.search(r'VARCHAR\((\d+)\)', column_info['type'].upper())
-                if match:
-                    column_def['max_length'] = int(match.group(1))
-            
-            # 处理DECIMAL类型的精度
-            elif column_info['type'].upper().startswith('DECIMAL'):
-                # 提取精度和标度信息
-                import re
-                match = re.search(r'DECIMAL\((\d+),(\d+)\)', column_info['type'].upper())
-                if match:
-                    column_def['max_length'] = int(match.group(1))  # 使用max_length存储精度
-            
-            # 添加列
-            success = self.storage_engine.add_column(table_name, column_def)
+            # 调用存储引擎添加列
+            success = self.storage_engine.add_column(table_name, column_info)
             
             if success:
-                return {
-                    "operation": "ALTER_TABLE",
-                    "table_name": table_name,
-                    "column_name": column_info['name'],
-                    "status": "success",
-                    "message": f"列 '{column_info['name']}' 添加到数据表 '{table_name}' 成功"
-                }
+                return {"message": f"Column added to table '{table_name}' successfully"}
             else:
-                return {
-                    "operation": "ALTER_TABLE",
-                    "table_name": table_name,
-                    "column_name": column_info['name'],
-                    "status": "error",
-                    "message": f"添加列 '{column_info['name']}' 到数据表 '{table_name}' 失败"
-                }
-                
+                return {"error": f"Failed to add column to table '{table_name}'"}
         except Exception as e:
-            return {
-                "operation": "ALTER_TABLE",
-                "table_name": table_name,
-                "status": "error",
-                "message": str(e)
-            }
+            return {"error": f"Error altering table: {str(e)}"}
     
-    def _execute_create_index(self, quad) -> Dict[str, Any]:
-        """执行CREATE INDEX操作"""
-        index_name = quad.arg1
+    def _execute_create_index(self, quad: Any) -> Dict[str, Any]:
+        """
+        执行CREATE INDEX操作
         
+        Args:
+            quad: CREATE_INDEX四元式
+            
+        Returns:
+            执行结果
+        """
         try:
+            index_name = quad.arg1
             # 解析表名和列信息
+            table_and_columns = quad.arg2
+            # 格式: "table_name(column1,column2)"
             import re
-            match = re.match(r'(.+?)\((.+)\)', quad.arg2)
-            if not match:
-                raise ValueError("索引格式无效")
-            
-            table_name = match.group(1)
-            columns_str = match.group(2)
-            columns = [col.strip() for col in columns_str.split(',')]
-            
-            # 创建索引
-            success = self.storage_engine.create_index(index_name, table_name, columns)
-            
-            if success:
-                return {
-                    "operation": "CREATE_INDEX",
-                    "index_name": index_name,
-                    "table_name": table_name,
-                    "columns": columns,
-                    "status": "success",
-                    "message": f"索引 '{index_name}' 在数据表 '{table_name}' 上创建成功"
-                }
-            else:
-                return {
-                    "operation": "CREATE_INDEX",
-                    "index_name": index_name,
-                    "table_name": table_name,
-                    "columns": columns,
-                    "status": "error",
-                    "message": f"在数据表 '{table_name}' 上创建索引 '{index_name}' 失败"
-                }
+            match = re.match(r'(.+?)\((.+)\)', table_and_columns)
+            if match:
+                table_name = match.group(1)
+                columns = match.group(2).split(',')
+                # 调用存储引擎创建索引
+                success = self.storage_engine.create_index(table_name, index_name, columns)
                 
-        except Exception as e:
-            return {
-                "operation": "CREATE_INDEX",
-                "index_name": index_name,
-                "status": "error",
-                "message": str(e)
-            }
-    
-    def _execute_insert(self, quad) -> Dict[str, Any]:
-        """执行INSERT操作"""
-        table_name = quad.arg1
-        
-        try:
-            # 解析参数
-            params = quad.arg2.split(';')
-            columns_str = params[0].split('=')[1] if '=' in params[0] else 'ALL'
-            values_str = params[1].split('=')[1] if len(params) > 1 and '=' in params[1] else '[]'
-            
-            # 解析值列表
-            import ast
-            values = ast.literal_eval(values_str)
-            
-            # 构建记录字典
-            columns = []
-            if columns_str == 'ALL':
-                # 获取表的所有列
-                try:
-                    table_info = self.storage_engine.get_table_info(table_name)
-                    if table_info and 'columns' in table_info and isinstance(table_info['columns'], list):
-                        columns = [col['name'] for col in table_info['columns']]
-                except Exception as e:
-                    print(f"Warning: Failed to get table info: {e}")
-                    # 如果无法获取表信息，使用默认列名
-                    columns = []
+                if success:
+                    return {"message": f"Index '{index_name}' created successfully"}
+                else:
+                    return {"error": f"Failed to create index '{index_name}'"}
             else:
-                try:
-                    columns = ast.literal_eval(columns_str)
-                except Exception as e:
-                    print(f"Warning: Failed to parse columns: {e}")
-                    columns = []
-            
-            # 构建记录
-            record = {}
-            for i, value in enumerate(values):
-                if i < len(columns):
-                    # 类型转换
-                    if value == 'NULL':
-                        record[columns[i]] = None
-                    elif isinstance(value, str) and value.replace('.', '').replace('-', '').isdigit():
-                        record[columns[i]] = float(value) if '.' in value else int(value)
-                    else:
-                        record[columns[i]] = value
-            
-            # 插入记录
-            self.storage_engine.insert(table_name, record)
-            
-            return {
-                "operation": "INSERT",
-                "table_name": table_name,
-                "affected_rows": 1,
-                "status": "success",
-                "message": f"1 行数据插入到 '{table_name}' 表中"
-            }
-            
+                return {"error": "Invalid index format"}
         except Exception as e:
-            return {
-                "operation": "INSERT",
-                "table_name": table_name,
-                "status": "error",
-                "message": str(e)
-            }
+            return {"error": f"Error creating index: {str(e)}"}
     
-    def _execute_update(self, quad) -> Dict[str, Any]:
-        """执行UPDATE操作"""
-        table_name = quad.arg1
+    def _execute_insert(self, quad: Any) -> Dict[str, Any]:
+        """
+        执行INSERT操作
         
+        Args:
+            quad: INSERT四元式
+            
+        Returns:
+            执行结果
+        """
         try:
-            # 解析参数
-            params = quad.arg2.split(';')
-            set_clause = None
-            where_clause = None
-            
-            for param in params:
-                if param.startswith('SET='):
-                    set_clause = param[4:]
-                elif param.startswith('WHERE='):
-                    where_clause = param[6:]
-            
-            if not set_clause:
-                raise ValueError("UPDATE语句缺少SET子句")
-            
-            # 解析SET子句
-            assignments = {}
-            for assignment in set_clause.split(';'):
-                if '=' in assignment:
-                    key, value = assignment.split('=', 1)
-                    # 类型转换
-                    if value == 'NULL':
-                        assignments[key] = None
-                    elif isinstance(value, str) and value.replace('.', '').replace('-', '').isdigit():
-                        assignments[key] = float(value) if '.' in value else int(value)
-                    else:
-                        assignments[key] = value.strip("'").strip('"')
-            
-            # 解析WHERE子句
-            condition = None
-            if where_clause and where_clause != "ALL":
-                # 解析WHERE条件 (例如: "id=1")
-                if any(op in where_clause for op in ['=', '!=', '<', '>', '<=', '>=']):
-                    # 找到操作符
-                    operators = ['<=', '>=', '!=', '<=', '>=', '=', '<', '>']
-                    operator = None
-                    for op in operators:
-                        if op in where_clause:
-                            operator = op
-                            break
-                    
-                    if operator:
-                        key, value = where_clause.split(operator, 1)
-                        key = key.strip()
-                        value = value.strip()
-                        
-                        # 类型转换
-                        if isinstance(value, str) and value.replace('.', '').replace('-', '').isdigit():
-                            condition = {key: {operator: float(value) if '.' in value else int(value)}}
+            table_name = quad.arg1
+            # 解析列和值
+            data_str = quad.arg2
+            # 格式: "COLUMNS=[col1,col2];VALUES=[val1,val2]"
+            import re
+            match = re.match(r'COLUMNS=(.+?);VALUES=(.+)', data_str)
+            if match:
+                columns_part = match.group(1)
+                values_part = match.group(2)
+                
+                # 解析值
+                import ast
+                if columns_part == 'ALL':
+                    columns = None
+                else:
+                    columns = ast.literal_eval(columns_part)
+                
+                values = ast.literal_eval(values_part)
+                
+                # 构造记录字典
+                if columns:
+                    record = dict(zip(columns, values))
+                else:
+                    record = {}
+                    for i, value in enumerate(values):
+                        # 尝试转换数据类型
+                        if isinstance(value, str) and value.isdigit():
+                            record[f'col_{i}'] = int(value)
+                        elif isinstance(value, str) and value.replace('.', '').isdigit():
+                            record[f'col_{i}'] = float(value)
                         else:
-                            condition = {key: {operator: value.strip("'").strip('"')}}
-            
-            # 更新记录
-            updated_count = self.storage_engine.update(table_name, assignments, condition)
-            
-            return {
-                "operation": "UPDATE",
-                "table_name": table_name,
-                "affected_rows": updated_count,
-                "status": "success",
-                "message": f"{updated_count} 行数据在 '{table_name}' 表中更新"
-            }
-            
+                            record[f'col_{i}'] = value
+                
+                # 调用存储引擎插入记录
+                record_id = self.storage_engine.insert(table_name, record)
+                
+                if record_id:
+                    return {"message": f"Record inserted successfully with ID: {record_id}"}
+                else:
+                    return {"error": "Failed to insert record"}
+            else:
+                return {"error": "Invalid insert format"}
         except Exception as e:
-            return {
-                "operation": "UPDATE",
-                "table_name": table_name,
-                "status": "error",
-                "message": str(e)
-            }
+            return {"error": f"Error inserting record: {str(e)}"}
     
-    def _execute_delete(self, quad) -> Dict[str, Any]:
-        """执行DELETE操作"""
-        table_name = quad.arg1
+    def _execute_update(self, quad: Any) -> Dict[str, Any]:
+        """
+        执行UPDATE操作
         
+        Args:
+            quad: UPDATE四元式
+            
+        Returns:
+            执行结果
+        """
         try:
-            # 解析参数
-            where_clause = quad.arg2  # DELETE操作的WHERE子句直接在arg2中
-            
-            # 解析WHERE子句
-            condition = None
-            if where_clause and where_clause != "ALL":
-                # 解析WHERE条件 (例如: "id=1" 或 "price<50")
-                if any(op in where_clause for op in ['=', '!=', '<', '>', '<=', '>=']):
-                    # 找到操作符
-                    operators = ['<=', '>=', '!=', '<=', '>=', '=', '<', '>']
-                    operator = None
-                    for op in operators:
-                        if op in where_clause:
-                            operator = op
-                            break
-                    
-                    if operator:
-                        key, value = where_clause.split(operator, 1)
-                        key = key.strip()
-                        value = value.strip()
-                        
-                        # 类型转换
-                        if isinstance(value, str) and value.replace('.', '').replace('-', '').isdigit():
-                            condition = {key: {operator: float(value) if '.' in value else int(value)}}
+            table_name = quad.arg1
+            # 解析SET和WHERE子句
+            data_str = quad.arg2
+            # 格式: "SET=col1=val1;col2=val2;WHERE=condition"
+            import re
+            match = re.match(r'SET=(.+?);WHERE=(.+)', data_str)
+            if match:
+                set_part = match.group(1)
+                where_part = match.group(2)
+                
+                # 解析SET子句
+                updates = {}
+                for assignment in set_part.split(';'):
+                    if '=' in assignment:
+                        col, val = assignment.split('=', 1)
+                        # 尝试转换数据类型
+                        if val.isdigit():
+                            updates[col] = int(val)
+                        elif val.replace('.', '').isdigit():
+                            updates[col] = float(val)
                         else:
-                            condition = {key: {operator: value.strip("'").strip('"')}}
-            
-            # 删除记录
-            deleted_count = self.storage_engine.delete(table_name, condition)
-            
-            return {
-                "operation": "DELETE",
-                "table_name": table_name,
-                "affected_rows": deleted_count,
-                "status": "success",
-                "message": f"{deleted_count} 行数据从 '{table_name}' 表中删除"
-            }
-            
+                            updates[col] = val
+                
+                # 解析WHERE子句
+                condition = None
+                if where_part != 'ALL':
+                    condition = where_part
+                
+                # 调用存储引擎更新记录
+                count = self.storage_engine.update(table_name, updates, condition)
+                
+                return {"message": f"{count} record(s) updated successfully"}
+            else:
+                return {"error": "Invalid update format"}
         except Exception as e:
-            return {
-                "operation": "DELETE",
-                "table_name": table_name,
-                "status": "error",
-                "message": str(e)
-            }
+            return {"error": f"Error updating records: {str(e)}"}
+    
+    def _execute_delete(self, quad: Any) -> Dict[str, Any]:
+        """
+        执行DELETE操作
+        
+        Args:
+            quad: DELETE四元式
+            
+        Returns:
+            执行结果
+        """
+        try:
+            table_name = quad.arg1
+            condition = quad.arg2
+            
+            # 调用存储引擎删除记录
+            count = self.storage_engine.delete(table_name, condition)
+            
+            return {"message": f"{count} record(s) deleted successfully"}
+        except Exception as e:
+            return {"error": f"Error deleting records: {str(e)}"}
     
     def _map_data_type(self, type_str: str) -> str:
         """映射数据类型"""
@@ -636,13 +489,10 @@ class SQLProcessor:
             result['quadruples_count'] = len(quadruples)
             
             # 目标代码生成
-            if result['is_complex']:
-                from src.compiler.codegen.translator import IntegratedCodeGenerator
-                translator = IntegratedCodeGenerator()
-            else:
-                from src.compiler.codegen.translator import QuadrupleTranslator
-                translator = QuadrupleTranslator()
-                
+            from src.compiler.codegen.translator import IntegratedCodeGenerator
+            translator = IntegratedCodeGenerator()
+           
+
             target_instructions = translator.generate_target_code(quadruples)
             result['instructions_count'] = len(target_instructions)
             

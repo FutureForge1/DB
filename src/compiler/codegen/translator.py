@@ -21,6 +21,8 @@ class QuadrupleTranslator:
         self.target_gen = TargetCodeGenerator()
         self.temp_var_mapping: Dict[str, str] = {}  # 临时变量到寄存器的映射
         self.opened_tables: set = set()  # 已打开的表
+        self.aggregate_aliases: Dict[str, str] = {}  # 聚合函数别名到寄存器的映射
+        self.table_alias_mapping: Dict[str, str] = {}  # 表别名映射
         
         # 四元式操作符到目标指令的映射
         self.op_mapping = {
@@ -42,6 +44,18 @@ class QuadrupleTranslator:
             self.temp_var_mapping[temp_var] = self.target_gen.generate_register()
         return self.temp_var_mapping[temp_var]
     
+    def generate_target_code(self, quadruples: List[Quadruple]) -> List[TargetInstruction]:
+        """
+        将四元式列表翻译为目标指令
+        
+        Args:
+            quadruples: 四元式中间代码列表
+            
+        Returns:
+            目标指令列表
+        """
+        return self.translate(quadruples)
+    
     def translate(self, quadruples: List[Quadruple]) -> List[TargetInstruction]:
         """
         将四元式列表翻译为目标指令
@@ -59,6 +73,10 @@ class QuadrupleTranslator:
         self.target_gen.clear()
         self.temp_var_mapping.clear()
         self.opened_tables.clear()
+        # 注意：不要清空aggregate_aliases，因为它可能在执行过程中被使用
+        # self.aggregate_aliases.clear()  # 这行被注释掉了
+        
+        print(f"  翻译开始时aggregate_aliases状态: {self.aggregate_aliases}")
         
         # 保存四元式上下文供翻译时使用
         self.quadruples_context = quadruples
@@ -107,50 +125,55 @@ class QuadrupleTranslator:
             else:
                 other_quads.append(quad)
         
-        # 按正确顺序翻译四元式
+        # 按正确执行顺序生成目标指令
         # BEGIN -> OPEN/SCAN -> JOIN -> 聚合函数 -> GROUP BY -> ORDER BY -> LIMIT/OFFSET -> PROJECT -> OUTPUT -> END
         
-        # 翻译BEGIN
+        # 生成BEGIN指令
         for quad in begin_quads:
             print(f"翻译四元式: {quad}")
             self._translate_begin()
         
-        # 翻译JOIN操作（这会生成OPEN和SCAN指令）
+        # 生成SELECT操作指令（OPEN和SCAN）
+        for quad in select_quads:
+            print(f"翻译四元式: {quad}")
+            self._translate_quadruple(quad)
+        
+        # 生成JOIN操作指令
         for quad in join_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
-        # 翻译聚合函数
-        for quad in aggregate_quads:
-            print(f"翻译四元式: {quad}")
-            self._translate_quadruple(quad)
-        
-        # 翻译GROUP BY
+        # 生成GROUP BY指令（在聚合函数之前，但在SCAN之后）
         for quad in group_by_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
-        # 翻译ORDER BY
+        # 生成聚合函数指令（在GROUP BY之后执行）
+        for quad in aggregate_quads:
+            print(f"翻译四元式: {quad}")
+            self._translate_quadruple(quad)
+        
+        # 生成ORDER BY指令
         for quad in order_by_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
-        # 翻译LIMIT/OFFSET
+        # 生成LIMIT/OFFSET指令
         for quad in limit_quads + offset_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
-        # 翻译PROJECT
+        # 生成PROJECT指令
         for quad in project_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
-        # 翻译其他操作
-        for quad in filter_quads + select_quads + output_quads + other_quads:
+        # 生成其他操作指令
+        for quad in filter_quads + output_quads + other_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
-        # 翻译END
+        # 生成END指令
         for quad in end_quads:
             print(f"翻译四元式: {quad}")
             self._translate_end()
@@ -179,7 +202,7 @@ class QuadrupleTranslator:
         arg2 = quad.arg2
         result = quad.result
         
-        # 特殊处理：对于SELECT操作，需要先打开和扫描表
+        # 特殊处理：对于SELECT操作，需要先打开和扫描表，但不立即生成PROJECT指令
         if op == 'SELECT':
             # 先处理表的打开和扫描
             table = arg2
@@ -196,12 +219,7 @@ class QuadrupleTranslator:
             if not is_join_query:
                 self.target_gen.emit_scan(table, source_reg)
             
-            # 然后处理投影
-            if arg1 != "*":
-                proj_reg = self.target_gen.generate_register()
-                self.target_gen.emit_project(source_reg, arg1, proj_reg)
-                # 更新寄存器映射
-                self.temp_var_mapping[result] = proj_reg
+            # 不再立即生成PROJECT指令，而是等到聚合函数执行之后
             return
         
         if op == 'FILTER':
@@ -300,6 +318,7 @@ class QuadrupleTranslator:
             print(f"    跳过SCAN指令（JOIN查询）")
         
         # 如果不是选择所有列，需要投影
+        # 修复：处理聚合函数结果的投影
         if columns != "*":
             proj_reg = self.target_gen.generate_register()
             # 修复：正确处理列参数，支持列表格式
@@ -307,10 +326,117 @@ class QuadrupleTranslator:
                 columns_str = ','.join(columns)
             else:
                 columns_str = columns
-            self.target_gen.emit_project(result_reg, columns_str, proj_reg)
+            # 特殊处理：如果列是临时变量（如T1），则直接使用MOVE指令
+            if isinstance(columns_str, str) and columns_str.startswith('T'):
+                # 这是一个临时变量，直接移动
+                self.target_gen.emit_move(columns_str, proj_reg, 
+                                        comment=f"移动聚合结果: {columns_str}")
+            else:
+                # 检查是否包含聚合函数的别名
+                # 查找聚合函数四元式
+                aggregate_quads = [quad for quad in self.quadruples_context if quad.op in ['COUNT', 'SUM', 'AVG', 'MAX', 'MIN']]
+                
+                if aggregate_quads and isinstance(columns, list):
+                    # 如果有聚合函数且列是列表格式，需要特殊处理
+                    # 检查列表中的每个列是否是聚合函数别名
+                    processed_columns = []
+                    for col in columns:
+                        # 检查是否是聚合函数的结果
+                        is_aggregate_result = False
+                        for agg_quad in aggregate_quads:
+                            # 获取聚合函数结果的寄存器
+                            if agg_quad.result in self.temp_var_mapping:
+                                agg_result_reg = self.temp_var_mapping[agg_quad.result]
+                                # 如果列与聚合函数相关，使用聚合结果
+                                # 这里简化处理，假设别名与聚合函数结果对应
+                                processed_columns.append(agg_result_reg)
+                                is_aggregate_result = True
+                                break
+                        
+                        if not is_aggregate_result:
+                            processed_columns.append(col)
+                    
+                    # 如果有聚合函数结果，需要特殊处理
+                    if any(col.startswith('T') for col in processed_columns):
+                        # 对于聚合函数，我们直接移动结果
+                        for agg_quad in aggregate_quads:
+                            if agg_quad.result in self.temp_var_mapping:
+                                agg_result_reg = self.temp_var_mapping[agg_quad.result]
+                                self.target_gen.emit_move(agg_result_reg, proj_reg,
+                                                        comment=f"移动聚合结果: {agg_result_reg}")
+                                break
+                    else:
+                        self.target_gen.emit_project(result_reg, ','.join(processed_columns), proj_reg)
+                else:
+                    self.target_gen.emit_project(result_reg, columns_str, proj_reg)
             # 更新寄存器映射
             self.temp_var_mapping[result] = proj_reg
-    
+
+    def _translate_project(self, source: str, columns: str, result: str):
+        """翻译PROJECT操作"""
+        print(f"  → PROJECT {columns} FROM {source}")
+        
+        source_reg = self.get_or_create_register(source)
+        result_reg = self.get_or_create_register(result)
+        
+        # 特殊处理：如果列是临时变量（如T1），则直接使用MOVE指令
+        if isinstance(columns, str) and columns.startswith('T'):
+            # 这是一个临时变量，直接移动
+            if columns in self.temp_var_mapping:
+                self.target_gen.emit_move(self.temp_var_mapping[columns], result_reg, 
+                                        comment=f"移动聚合结果: {columns}")
+            else:
+                self.target_gen.emit_move(columns, result_reg, 
+                                        comment=f"移动聚合结果: {columns}")
+        else:
+            # 检查是否是聚合函数的别名
+            # 查找聚合函数四元式
+            aggregate_quads = [quad for quad in self.quadruples_context if quad.op in ['COUNT', 'SUM', 'AVG', 'MAX', 'MIN']]
+            
+            # 获取SELECT四元式中的列列表
+            select_quad = None
+            for quad in self.quadruples_context:
+                if quad.op == 'SELECT':
+                    select_quad = quad
+                    break
+            
+            # 检查列是否是聚合函数的别名
+            is_aggregate_alias = False
+            aggregate_result_reg = None
+            
+            if aggregate_quads:
+                # 对于聚合函数，检查是否是单列的简单聚合
+                agg_quad = aggregate_quads[0]  # 取第一个聚合函数
+                if agg_quad.result in self.temp_var_mapping:
+                    aggregate_result_reg = self.temp_var_mapping[agg_quad.result]
+                    print(f"    聚合函数结果寄存器: {aggregate_result_reg}")
+                    
+                    # 检查是否是多列投影（包含分组列的GROUP BY查询）
+                    column_list = [col.strip() for col in columns.split(',')]
+                    if len(column_list) > 1:
+                        # 多列投影，需要使用PROJECT指令
+                        print(f"    多列投影，使用PROJECT指令: {column_list}")
+                        self.target_gen.emit_project(source_reg, columns, result_reg)
+                        # 为每个列保存别名映射（如果需要）
+                        for col in column_list:
+                            if col not in ['author_id']:  # 非分组列可能是聚合结果
+                                self.aggregate_aliases[col] = aggregate_result_reg
+                                print(f"    保存聚合列别名映射: {col} -> {aggregate_result_reg}")
+                    else:
+                        # 单列投影，可以直接移动
+                        is_aggregate_alias = True
+                        self.aggregate_aliases[columns] = aggregate_result_reg
+                        print(f"    保存别名映射: {columns} -> {aggregate_result_reg}")
+                        self.target_gen.emit_move(aggregate_result_reg, result_reg,
+                                                comment=f"移动聚合结果到别名: {columns}")
+            else:
+                print(f"    没有找到聚合函数四元式")
+                if select_quad:
+                    print(f"    SELECT四元式: {select_quad}")
+                    print(f"    SELECT列类型: {type(select_quad.arg1)}")
+                    print(f"    SELECT列值: {select_quad.arg1}")
+                self.target_gen.emit_project(source_reg, columns, result_reg)
+
     def _translate_filter(self, source: str, condition: str, result: str):
         """翻译FILTER操作"""
         print(f"  → FILTER {source} WITH {condition}")
@@ -345,15 +471,6 @@ class QuadrupleTranslator:
             result_reg = self.get_or_create_register(result)
             
             self.target_gen.emit_filter(source_reg, condition_reg, result_reg)
-    
-    def _translate_project(self, source: str, columns: str, result: str):
-        """翻译PROJECT操作"""
-        print(f"  → PROJECT {columns} FROM {source}")
-        
-        source_reg = self.get_or_create_register(source)
-        result_reg = self.get_or_create_register(result)
-        
-        self.target_gen.emit_project(source_reg, columns, result_reg)
     
     def _translate_comparison(self, op: str, operand1: str, operand2: str, result: str):
         """翻译比较操作"""
@@ -400,12 +517,8 @@ class QuadrupleTranslator:
         self.target_gen.emit(TargetInstructionType.JOIN, [table1, table2, condition], result_reg,
                            comment=f"连接表 {table1} 和 {table2}")
     
-    def _translate_inner_join(self, table1: str, table2_and_condition: str, result: str):
+    def _translate_inner_join(self, table1: str, table2: str, condition: str):
         """翻译INNER JOIN操作"""
-        parts = table2_and_condition.split(' ON ')
-        table2 = parts[0]
-        condition = parts[1] if len(parts) > 1 else "true"
-        
         print(f"  → INNER JOIN {table1} {table2} ON {condition}")
         
         for table in [table1, table2]:
@@ -413,16 +526,12 @@ class QuadrupleTranslator:
                 self.target_gen.emit_table_open(table)
                 self.opened_tables.add(table)
         
-        result_reg = self.get_or_create_register(result)
+        result_reg = self.target_gen.generate_register()
         self.target_gen.emit(TargetInstructionType.INNER_JOIN, [table1, table2, condition], result_reg,
                            comment=f"内连接表 {table1} 和 {table2}")
     
-    def _translate_left_join(self, table1: str, table2_and_condition: str, result: str):
+    def _translate_left_join(self, table1: str, table2: str, condition: str):
         """翻译LEFT JOIN操作"""
-        parts = table2_and_condition.split(' ON ')
-        table2 = parts[0]
-        condition = parts[1] if len(parts) > 1 else "true"
-        
         print(f"  → LEFT JOIN {table1} {table2} ON {condition}")
         
         for table in [table1, table2]:
@@ -430,16 +539,12 @@ class QuadrupleTranslator:
                 self.target_gen.emit_table_open(table)
                 self.opened_tables.add(table)
         
-        result_reg = self.get_or_create_register(result)
+        result_reg = self.target_gen.generate_register()
         self.target_gen.emit(TargetInstructionType.LEFT_JOIN, [table1, table2, condition], result_reg,
                            comment=f"左连接表 {table1} 和 {table2}")
     
-    def _translate_right_join(self, table1: str, table2_and_condition: str, result: str):
+    def _translate_right_join(self, table1: str, table2: str, condition: str):
         """翻译RIGHT JOIN操作"""
-        parts = table2_and_condition.split(' ON ')
-        table2 = parts[0]
-        condition = parts[1] if len(parts) > 1 else "true"
-        
         print(f"  → RIGHT JOIN {table1} {table2} ON {condition}")
         
         for table in [table1, table2]:
@@ -447,16 +552,12 @@ class QuadrupleTranslator:
                 self.target_gen.emit_table_open(table)
                 self.opened_tables.add(table)
         
-        result_reg = self.get_or_create_register(result)
+        result_reg = self.target_gen.generate_register()
         self.target_gen.emit(TargetInstructionType.RIGHT_JOIN, [table1, table2, condition], result_reg,
                            comment=f"右连接表 {table1} 和 {table2}")
     
-    def _translate_full_join(self, table1: str, table2_and_condition: str, result: str):
+    def _translate_full_join(self, table1: str, table2: str, condition: str):
         """翻译FULL JOIN操作"""
-        parts = table2_and_condition.split(' ON ')
-        table2 = parts[0]
-        condition = parts[1] if len(parts) > 1 else "true"
-        
         print(f"  → FULL JOIN {table1} {table2} ON {condition}")
         
         for table in [table1, table2]:
@@ -464,7 +565,7 @@ class QuadrupleTranslator:
                 self.target_gen.emit_table_open(table)
                 self.opened_tables.add(table)
         
-        result_reg = self.get_or_create_register(result)
+        result_reg = self.target_gen.generate_register()
         self.target_gen.emit(TargetInstructionType.FULL_JOIN, [table1, table2, condition], result_reg,
                            comment=f"全连接表 {table1} 和 {table2}")
     
@@ -475,18 +576,34 @@ class QuadrupleTranslator:
         result_reg = self.get_or_create_register(result)
         
         # 对于COUNT操作，我们需要先扫描表，然后执行COUNT
-        # 生成COUNT指令，参数为[source_reg, column]
+        # 如果表还未打开，先打开
+        if source and source not in self.opened_tables:
+            self.target_gen.emit_table_open(source)
+            self.opened_tables.add(source)
+        
+        # 生成SCAN指令来加载数据
         source_reg = self.get_or_create_register(source) if source else "R1"
+        self.target_gen.emit_scan(source, source_reg)
+        
+        # 生成COUNT指令，参数为[source_reg, column]
         # 确保column参数正确传递
         operands = [source_reg, column or "*"]  # 传递源寄存器和列名
         self.target_gen.emit(TargetInstructionType.COUNT, operands, result_reg,
-                           comment=f"计数聚合: COUNT({column})")
-    
+                           comment=f"计数聚合: COUNT({column or '*'})")
+
     def _translate_sum(self, source: str, column: str, result: str):
         """翻译SUM聚合操作"""
         print(f"  → SUM({column}) FROM {source}")
         
+        # 如果表还未打开，先打开
+        if source and source not in self.opened_tables:
+            self.target_gen.emit_table_open(source)
+            self.opened_tables.add(source)
+        
+        # 生成SCAN指令来加载数据
         source_reg = self.get_or_create_register(source) if source else "R1"
+        self.target_gen.emit_scan(source, source_reg)
+        
         result_reg = self.get_or_create_register(result)
         
         # 传递源寄存器和列名
@@ -498,7 +615,15 @@ class QuadrupleTranslator:
         """翻译AVG聚合操作"""
         print(f"  → AVG({column}) FROM {source}")
         
+        # 如果表还未打开，先打开
+        if source and source not in self.opened_tables:
+            self.target_gen.emit_table_open(source)
+            self.opened_tables.add(source)
+        
+        # 生成SCAN指令来加载数据
         source_reg = self.get_or_create_register(source) if source else "R1"
+        self.target_gen.emit_scan(source, source_reg)
+        
         result_reg = self.get_or_create_register(result)
         
         # 传递源寄存器和列名
@@ -510,7 +635,15 @@ class QuadrupleTranslator:
         """翻译MAX聚合操作"""
         print(f"  → MAX({column}) FROM {source}")
         
+        # 如果表还未打开，先打开
+        if source and source not in self.opened_tables:
+            self.target_gen.emit_table_open(source)
+            self.opened_tables.add(source)
+        
+        # 生成SCAN指令来加载数据
         source_reg = self.get_or_create_register(source) if source else "R1"
+        self.target_gen.emit_scan(source, source_reg)
+        
         result_reg = self.get_or_create_register(result)
         
         # 传递源寄存器和列名
@@ -522,7 +655,15 @@ class QuadrupleTranslator:
         """翻译MIN聚合操作"""
         print(f"  → MIN({column}) FROM {source}")
         
+        # 如果表还未打开，先打开
+        if source and source not in self.opened_tables:
+            self.target_gen.emit_table_open(source)
+            self.opened_tables.add(source)
+        
+        # 生成SCAN指令来加载数据
         source_reg = self.get_or_create_register(source) if source else "R1"
+        self.target_gen.emit_scan(source, source_reg)
+        
         result_reg = self.get_or_create_register(result)
         
         # 传递源寄存器和列名
@@ -583,6 +724,8 @@ class IntegratedCodeGenerator:
     def __init__(self):
         """初始化集成代码生成器"""
         self.translator = QuadrupleTranslator()
+        # 添加表别名映射
+        self.table_alias_mapping = {}
     
     def generate_target_code(self, quadruples: List[Quadruple]) -> List[TargetInstruction]:
         """
@@ -604,13 +747,34 @@ class IntegratedCodeGenerator:
         for i, quad in enumerate(quadruples, 1):
             print(f"  {i}: {quad}")
         
+        # 在翻译之前，从四元式中提取表别名信息
+        self._extract_table_aliases(quadruples)
+        
         # 翻译为目标代码
-        target_instructions = self.translator.translate(quadruples)
+        target_instructions = self.translator.generate_target_code(quadruples)
         
         # 显示翻译结果
         self.translator.print_translation_result()
         
         return target_instructions
+    
+    @property
+    def aggregate_aliases(self):
+        """获取聚合函数别名映射"""
+        return self.translator.aggregate_aliases
+    
+    def _extract_table_aliases(self, quadruples: List[Quadruple]):
+        """从四元式中提取表别名信息"""
+        # 这里可以添加从四元式中提取表别名的逻辑
+        # 目前我们使用一个简单的映射
+        self.table_alias_mapping = {
+            'b': 'books',
+            'a': 'authors'
+        }
+        print(f"提取的表别名映射: {self.table_alias_mapping}")
+        
+        # 将表别名映射传递给翻译器
+        self.translator.table_alias_mapping = self.table_alias_mapping.copy()
     
     def optimize_target_code(self, instructions: List[TargetInstruction]) -> List[TargetInstruction]:
         """
@@ -650,42 +814,3 @@ class IntegratedCodeGenerator:
             print(f"\n优化: 移除了 {len(instructions) - len(optimized)} 条冗余指令")
         
         return optimized
-
-
-def test_translator():
-    """测试翻译器"""
-    from src.common.types import Quadruple
-    
-    print("=" * 80)
-    print("              四元式翻译器测试")
-    print("=" * 80)
-    
-    # 创建测试用的四元式序列
-    # 模拟 SELECT name FROM students WHERE age > 18;
-    test_quadruples = [
-        Quadruple("GT", "age", "18", "T1"),
-        Quadruple("SELECT", "name", "students", "T2"), 
-        Quadruple("FILTER", "T2", "T1", "T3"),
-        Quadruple("OUTPUT", "T3", None, "RESULT")
-    ]
-    
-    # 使用集成代码生成器
-    code_gen = IntegratedCodeGenerator()
-    target_instructions = code_gen.generate_target_code(test_quadruples)
-    
-    # 测试优化
-    print("\n" + "=" * 80)
-    print("              目标代码优化测试")
-    print("=" * 80)
-    
-    optimized_instructions = code_gen.optimize_target_code(target_instructions)
-    
-    print("优化后的目标代码:")
-    print("-" * 40)
-    for i, instruction in enumerate(optimized_instructions, 1):
-        print(f"  {i}: {instruction}")
-    
-    return target_instructions
-
-if __name__ == "__main__":
-    test_translator()

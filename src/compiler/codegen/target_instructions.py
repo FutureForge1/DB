@@ -252,6 +252,12 @@ class TargetCodeGenerator:
         return self.emit(TargetInstructionType.OFFSET, [count],
                         comment=f"结果集偏移量: {count}")
     
+    def emit_move(self, source_reg: str, dest_reg: str, comment: str = None) -> TargetInstruction:
+        """生成移动数据指令"""
+        if comment is None:
+            comment = f"移动数据: {source_reg} -> {dest_reg}"
+        return self.emit(TargetInstructionType.MOVE, [source_reg], dest_reg, comment)
+
     def get_instructions(self) -> List[TargetInstruction]:
         """获取生成的指令列表"""
         return self.instructions.copy()
