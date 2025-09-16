@@ -59,6 +59,42 @@ KEYWORD_MAP = {
     'ANY': TokenType.ANY,
     'SOME': TokenType.SOME,
     
+    # DDL关键字
+    'CREATE': TokenType.CREATE,
+    'TABLE': TokenType.TABLE,
+    'DROP': TokenType.DROP,
+    'ALTER': TokenType.ALTER,
+    'INDEX': TokenType.INDEX,
+    'SHOW': TokenType.SHOW,
+    
+    # DML关键字
+    'INSERT': TokenType.INSERT,
+    'INTO': TokenType.INTO,
+    'VALUES': TokenType.VALUES,
+    'UPDATE': TokenType.UPDATE,
+    'SET': TokenType.SET,
+    'DELETE': TokenType.DELETE,
+    
+    # 约束关键字
+    'PRIMARY': TokenType.PRIMARY,
+    'KEY': TokenType.KEY,
+    'FOREIGN': TokenType.FOREIGN,
+    'REFERENCES': TokenType.REFERENCES,
+    'UNIQUE': TokenType.UNIQUE,
+    'NOT': TokenType.NOT,
+    'NULL': TokenType.NULL,
+    'DEFAULT': TokenType.DEFAULT,
+    
+    # 数据类型关键字
+    'INTEGER': TokenType.INTEGER,
+    'INT': TokenType.INT,
+    'VARCHAR': TokenType.VARCHAR,
+    'CHAR': TokenType.CHAR,
+    'TEXT': TokenType.TEXT,
+    'FLOAT': TokenType.FLOAT,
+    'DOUBLE': TokenType.DOUBLE,
+    'DECIMAL': TokenType.DECIMAL,
+    
 }
 
 class Lexer:    

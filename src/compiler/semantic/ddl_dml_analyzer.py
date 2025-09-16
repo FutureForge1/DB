@@ -13,11 +13,12 @@ from src.common.types import ASTNode, ASTNodeType, Quadruple, SemanticError
 class DDLDMLSemanticAnalyzer:
     """DDL/DML语义分析器"""
     
-    def __init__(self):
+    def __init__(self, storage_engine=None):
         """初始化语义分析器"""
         self.quadruples = []
         self.temp_counter = 0
         self.errors = []
+        self.storage_engine = storage_engine
     
     def analyze(self, ast: ASTNode) -> List[Quadruple]:
         """
@@ -68,8 +69,12 @@ class DDLDMLSemanticAnalyzer:
                     context="DDL/DML分析"
                 )
                 
+        except SemanticError as e:
+            # 格式化详细的语义错误信息
+            detailed_error = e.format_message()
+            self.errors.append(detailed_error)
         except Exception as e:
-            self.errors.append(str(e))
+            self.errors.append(f"语义分析异常: {str(e)}")
             
         return self.quadruples
     
@@ -83,6 +88,9 @@ class DDLDMLSemanticAnalyzer:
         # 获取表名
         table_name = ast.children[0].value  # TABLE_NAME节点
         
+        # 检查表是否已经存在
+        self._check_table_not_exists(table_name, "CREATE TABLE")
+        
         # 获取列定义
         columns_node = ast.children[1]  # COLUMN_LIST节点
         columns = []
@@ -90,6 +98,9 @@ class DDLDMLSemanticAnalyzer:
         for column_node in columns_node.children:
             column_info = self._extract_column_info(column_node)
             columns.append(column_info)
+        
+        # 验证列定义的有效性
+        self._validate_column_definitions(columns, table_name)
         
         # 生成CREATE_TABLE四元式
         temp_result = self._next_temp()
@@ -134,6 +145,9 @@ class DDLDMLSemanticAnalyzer:
         """分析DROP TABLE语句"""
         table_name = ast.children[0].value  # TABLE_NAME节点
         
+        # 检查表是否存在
+        self._check_table_exists(table_name, "DROP TABLE")
+        
         temp_result = self._next_temp()
         quad = Quadruple(
             op="DROP_TABLE",
@@ -160,6 +174,20 @@ class DDLDMLSemanticAnalyzer:
                 result=temp_result
             )
             self.quadruples.append(quad)
+            
+        elif operation == "DROP_COLUMN":
+            column_name = ast.children[2].value  # 列名节点
+            
+            temp_result = self._next_temp()
+            quad = Quadruple(
+                op="ALTER_TABLE_DROP",
+                arg1=table_name,
+                arg2=column_name,
+                result=temp_result
+            )
+            self.quadruples.append(quad)
+        else:
+            self.errors.append(f"Unsupported ALTER TABLE operation: {operation}")
     
     def _analyze_create_index(self, ast: ASTNode):
         """分析CREATE INDEX语句"""
@@ -323,6 +351,105 @@ class DDLDMLSemanticAnalyzer:
     def get_errors(self) -> List[str]:
         """获取语义错误列表"""
         return self.errors
+    
+    def _check_table_not_exists(self, table_name: str, operation: str):
+        """检查表不存在（用于CREATE TABLE等操作）"""
+        # 基本验证
+        if not table_name or not table_name.strip():
+            raise SemanticError(
+                "表名错误",
+                f"{operation} 操作中表名不能为空",
+                context=f"DDL语义检查 - {operation}"
+            )
+        
+        # 检查表名格式
+        import re
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+            raise SemanticError(
+                "表名格式错误",
+                f"表名 '{table_name}' 格式无效，表名必须以字母或下划线开头，只能包含字母、数字和下划线",
+                context=f"DDL语义检查 - {operation}"
+            )
+        
+        # 如果有存储引擎，检查表是否已存在
+        if self.storage_engine:
+            try:
+                existing_tables = self.storage_engine.list_tables()
+                if table_name in existing_tables:
+                    raise SemanticError(
+                        "表已存在错误",
+                        f"表 '{table_name}' 已经存在，无法重复创建",
+                        context=f"DDL语义检查 - {operation} - 现有表: {', '.join(existing_tables)}"
+                    )
+            except SemanticError:
+                raise  # 重新抛出语义错误
+            except Exception as e:
+                # 存储引擎访问失败时，记录警告但不阻止执行
+                print(f"  警告: 无法验证表存在性 - {e}")
+    
+    def _check_table_exists(self, table_name: str, operation: str):
+        """检查表存在（用于DROP TABLE等操作）"""
+        # 基本验证
+        if not table_name or not table_name.strip():
+            raise SemanticError(
+                "表名错误",
+                f"{operation} 操作中表名不能为空",
+                context=f"DDL语义检查 - {operation}"
+            )
+        
+        # 如果有存储引擎，检查表是否存在
+        if self.storage_engine:
+            try:
+                existing_tables = self.storage_engine.list_tables()
+                if table_name not in existing_tables:
+                    raise SemanticError(
+                        "表不存在错误",
+                        f"表 '{table_name}' 不存在，无法执行 {operation} 操作",
+                        context=f"DDL语义检查 - {operation} - 现有表: {', '.join(existing_tables)}"
+                    )
+            except SemanticError:
+                raise  # 重新抛出语义错误
+            except Exception as e:
+                # 存储引擎访问失败时，记录警告但不阻止执行
+                print(f"  警告: 无法验证表存在性 - {e}")
+    
+    def _validate_column_definitions(self, columns: List[Dict], table_name: str):
+        """验证列定义的有效性"""
+        if not columns:
+            raise SemanticError(
+                "列定义错误",
+                f"表 '{table_name}' 必须至少包含一个列定义",
+                context="CREATE TABLE语义检查"
+            )
+        
+        # 检查重复列名
+        column_names = [col['name'] for col in columns]
+        duplicate_names = set([name for name in column_names if column_names.count(name) > 1])
+        if duplicate_names:
+            raise SemanticError(
+                "列定义错误",
+                f"表 '{table_name}' 中存在重复的列名: {', '.join(duplicate_names)}",
+                context="CREATE TABLE语义检查"
+            )
+        
+        # 验证每个列定义
+        for col in columns:
+            col_name = col.get('name', '')
+            col_type = col.get('type', '')
+            
+            if not col_name or not col_name.strip():
+                raise SemanticError(
+                    "列定义错误",
+                    f"表 '{table_name}' 中存在空的列名",
+                    context="CREATE TABLE语义检查"
+                )
+            
+            if not col_type or not col_type.strip():
+                raise SemanticError(
+                    "列定义错误", 
+                    f"表 '{table_name}' 中列 '{col_name}' 缺少数据类型",
+                    context="CREATE TABLE语义检查"
+                )
 
 
 def test_ddl_dml_analyzer():

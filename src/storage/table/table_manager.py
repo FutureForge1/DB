@@ -534,6 +534,54 @@ class TableManager:
         self._save_schemas()
         return True
     
+    def drop_column(self, table_name: str, column_name: str) -> bool:
+        """从表中删除列"""
+        if table_name not in self.tables:
+            return False
+        
+        schema = self.tables[table_name]
+        
+        # 检查列是否存在
+        if not schema.get_column(column_name):
+            return False
+        
+        # 检查是否为主键列（不允许删除主键列）
+        if schema.primary_key == column_name:
+            print(f"Cannot drop primary key column '{column_name}'")
+            return False
+        
+        # 从schema中删除列定义
+        schema.columns = [col for col in schema.columns if col.name != column_name]
+        
+        # 更新现有记录，删除该列的数据
+        for page_id in self.table_pages.get(table_name, []):
+            page = self.buffer_manager.get_page(page_id)
+            if page:
+                records = page.get_records()
+                page_modified = False
+                
+                for record in records:
+                    if column_name in record:
+                        del record[column_name]
+                        page_modified = True
+                
+                if page_modified:
+                    # 重建页面数据
+                    page.data = bytearray(page.data.__class__(b'\x00' * len(page.data)))
+                    page.header.record_count = 0
+                    page.header.free_space = len(page.data)
+                    page.records.clear()
+                    
+                    for record in records:
+                        page.add_record(record)
+                    
+                    self.buffer_manager.unpin_page(page_id, is_dirty=True)
+                else:
+                    self.buffer_manager.unpin_page(page_id)
+        
+        self._save_schemas()
+        return True
+    
     def create_index(self, index_name: str, table_name: str, columns: List[str]) -> bool:
         """创建索引（简化实现，仅记录索引信息）"""
         # 在实际实现中，这里会创建索引结构

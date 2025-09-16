@@ -138,7 +138,8 @@ class Parser:
         except SyntaxError as e:
             print("-" * 80)
             print(f"语法分析失败: {e}")
-            return None
+            # 重新抛出异常，保留详细错误信息
+            raise e
     
     def _get_remaining_input(self) -> str:
         """获取剩余输入串的显示"""

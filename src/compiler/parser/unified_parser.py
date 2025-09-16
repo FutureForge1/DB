@@ -59,6 +59,9 @@ class UnifiedSQLParser:
                 self._provide_sql_suggestion(self.sql_type)
                 raise SyntaxError(f"不支持的SQL语句类型: {self.sql_type}")
                 
+        except SyntaxError as e:
+            # 保留原始的语法错误信息
+            raise e
         except Exception as e:
             raise SyntaxError(f"SQL parsing failed: {e}")
     
@@ -123,12 +126,18 @@ class UnifiedSQLParser:
         # 检查是否为复杂查询
         is_complex = self._is_complex_query()
         
-        if is_complex:
-            parser = ExtendedParser(self.tokens)
-        else:
-            parser = Parser(self.tokens)
-        
-        return parser.parse()
+        try:
+            if is_complex:
+                parser = ExtendedParser(self.tokens)
+            else:
+                parser = Parser(self.tokens)
+            
+            return parser.parse()
+        except SyntaxError as e:
+            # 重新抛出语法错误，保留详细信息
+            raise e
+        except Exception as e:
+            raise SyntaxError(f"SELECT语句解析失败: {e}")
     
     def _parse_ddl(self) -> Optional[ASTNode]:
         """解析DDL语句"""

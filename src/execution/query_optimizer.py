@@ -194,9 +194,16 @@ class QueryOptimizer:
             # 移除原来位置的过滤条件
             if applied:
                 final_optimized = []
-                filter_indices = {idx for idx, _ in filter_conditions}
+                # 获取原始指令中过滤条件的指令对象，而不是索引
+                filter_instructions = {id(filter_instr) for _, filter_instr in filter_conditions}
+                
                 for i, instr in enumerate(optimized):
-                    if i not in filter_indices or i == scan_index:
+                    # 保护关键指令不被移除
+                    if instr.op in [TargetInstructionType.OUTPUT, TargetInstructionType.HALT, 
+                                  TargetInstructionType.OPEN, TargetInstructionType.CLOSE]:
+                        final_optimized.append(instr)
+                    # 如果不是重复的过滤条件，保留
+                    elif id(instr) not in filter_instructions or i <= scan_index:
                         final_optimized.append(instr)
                 optimized = final_optimized
         else:
@@ -425,6 +432,12 @@ class QueryOptimizer:
         loaded_registers = set()
         
         for instr in instructions:
+            # 保护关键指令，不进行死代码消除
+            if instr.op in [TargetInstructionType.OUTPUT, TargetInstructionType.HALT, 
+                          TargetInstructionType.OPEN, TargetInstructionType.CLOSE]:
+                optimized.append(instr)
+                continue
+                
             if instr.op == TargetInstructionType.LOAD:
                 register = instr.operands[0] if instr.operands else None
                 

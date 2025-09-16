@@ -76,10 +76,33 @@ class UnifiedSQLProcessor:
             
             # 1. 使用统一解析器进行词法和语法分析
             unified_parser = UnifiedSQLParser(sql)
-            ast, sql_type = unified_parser.parse()
+            try:
+                ast, sql_type = unified_parser.parse()
+            except Exception as parse_error:
+                # 捕获详细的语法分析错误
+                error_msg = str(parse_error)
+                if "Error at line" in error_msg:
+                    # 保留详细的语法错误信息
+                    detailed_error = error_msg
+                else:
+                    detailed_error = f"语法分析失败: {error_msg}"
+                
+                error_result = [{
+                    "type": "error_message",
+                    "message": detailed_error,
+                    "status": "error",
+                    "error_type": "syntax_error"
+                }]
+                return False, error_result, detailed_error
             
             if ast is None:
-                return False, [], "语法分析失败"
+                error_result = [{
+                    "type": "error_message",
+                    "message": "语法分析失败: 无法解析SQL语句",
+                    "status": "error",
+                    "error_type": "syntax_error"
+                }]
+                return False, error_result, "语法分析失败"
             
             print(f"  → 检测到{sql_type}语句")
             
@@ -95,50 +118,158 @@ class UnifiedSQLProcessor:
                     lexer = Lexer(sql)
                     tokens = lexer.tokenize()
                     parser = ExtendedParser(tokens)
-                    ast = parser.parse()
+                    try:
+                        ast = parser.parse()
+                    except Exception as parse_error:
+                        detailed_error = f"复杂查询语法分析失败: {str(parse_error)}"
+                        error_result = [{
+                            "type": "error_message",
+                            "message": detailed_error,
+                            "status": "error",
+                            "error_type": "syntax_error"
+                        }]
+                        return False, error_result, detailed_error
+                    
                     if ast is None:
-                        return False, [], "复杂查询语法分析失败"
+                        error_result = [{
+                            "type": "error_message", 
+                            "message": "复杂查询语法分析失败: 无法解析SQL语句",
+                            "status": "error",
+                            "error_type": "syntax_error"
+                        }]
+                        return False, error_result, "复杂查询语法分析失败"
                     semantic_analyzer = ExtendedSemanticAnalyzer(self.storage_engine)
                 else:
                     from src.compiler.semantic.analyzer import SemanticAnalyzer
                     # 修正：传入存储引擎实例
                     semantic_analyzer = SemanticAnalyzer(self.storage_engine)
                     
-                quadruples = semantic_analyzer.analyze(ast)
+                try:
+                    quadruples = semantic_analyzer.analyze(ast)
+                except Exception as semantic_error:
+                    detailed_error = f"语义分析失败: {str(semantic_error)}"
+                    error_result = [{
+                        "type": "error_message",
+                        "message": detailed_error,
+                        "status": "error",
+                        "error_type": "semantic_error"
+                    }]
+                    return False, error_result, detailed_error
                 
             elif sql_type in ["DDL", "DML"]:
-                # DDL/DML语句使用新的语义分析器
-                semantic_analyzer = DDLDMLSemanticAnalyzer()
-                quadruples = semantic_analyzer.analyze(ast)
+                # DDL/DML语句使用新的语义分析器，传入存储引擎进行详细验证
+                semantic_analyzer = DDLDMLSemanticAnalyzer(self.storage_engine)
+                try:
+                    quadruples = semantic_analyzer.analyze(ast)
+                except Exception as semantic_error:
+                    detailed_error = f"语义分析失败: {str(semantic_error)}"
+                    error_result = [{
+                        "type": "error_message",
+                        "message": detailed_error,
+                        "status": "error",
+                        "error_type": "semantic_error"
+                    }]
+                    return False, error_result, detailed_error
                 
                 # 检查语义错误
                 errors = semantic_analyzer.get_errors()
                 if errors:
-                    return False, [], f"语义分析失败: {'; '.join(errors)}"
+                    detailed_error = f"语义分析失败: {'; '.join(errors)}"
+                    error_result = [{
+                        "type": "error_message",
+                        "message": detailed_error,
+                        "status": "error",
+                        "error_type": "semantic_error"
+                    }]
+                    return False, error_result, detailed_error
                     
             else:
-                return False, [], f"不支持的SQL类型: {sql_type}"
+                error_result = [{
+                    "type": "error_message",
+                    "message": f"不支持的SQL类型: {sql_type}",
+                    "status": "error",
+                    "error_type": "unsupported_sql_type"
+                }]
+                return False, error_result, f"不支持的SQL类型: {sql_type}"
             
             if not quadruples:
-                return False, [], "语义分析失败"
+                error_result = [{
+                    "type": "error_message",
+                    "message": "语义分析失败: 无法生成中间代码",
+                    "status": "error",
+                    "error_type": "semantic_error"
+                }]
+                return False, error_result, "语义分析失败"
             
             # 3. 目标代码生成和执行
             if sql_type == "SELECT":
                 # SELECT查询需要目标代码生成和执行
-                translator = IntegratedCodeGenerator()
-                target_instructions = translator.generate_target_code(quadruples)
-                results = self.execution_engine.execute(target_instructions, translator)
-                return True, results, ""
+                try:
+                    translator = IntegratedCodeGenerator()
+                    target_instructions = translator.generate_target_code(quadruples)
+                    results = self.execution_engine.execute(target_instructions, translator)
+                    return True, results, ""
+                except Exception as exec_error:
+                    detailed_error = f"查询执行失败: {str(exec_error)}"
+                    error_result = [{
+                        "type": "error_message",
+                        "message": detailed_error,
+                        "status": "error",
+                        "error_type": "execution_error"
+                    }]
+                    return False, error_result, detailed_error
                 
             else:
                 # DDL/DML语句直接执行四元式
-                results = self._execute_ddl_dml(quadruples, sql_type)
-                return True, results, ""
+                ddl_dml_results = self._execute_ddl_dml(quadruples, sql_type)
+                
+                # 将DDL/DML执行结果转换为统一格式
+                formatted_results = []
+                for result in ddl_dml_results:
+                    if isinstance(result, dict):
+                        if "message" in result:
+                            # 成功消息
+                            formatted_results.append({
+                                "type": "success_message",
+                                "message": result["message"],
+                                "status": "success"
+                            })
+                        elif "error" in result:
+                            # 错误消息
+                            formatted_results.append({
+                                "type": "error_message", 
+                                "message": result["error"],
+                                "status": "error"
+                            })
+                        elif "data" in result:
+                            # SHOW类语句的数据结果
+                            formatted_results.extend(result["data"])
+                        else:
+                            # 其他情况，直接添加
+                            formatted_results.append(result)
+                    else:
+                        # 非字典结果，包装成消息格式
+                        formatted_results.append({
+                            "type": "info_message",
+                            "message": str(result),
+                            "status": "info"
+                        })
+                
+                return True, formatted_results, ""
             
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return False, [], str(e)
+            
+            # 将异常信息格式化为结果数据
+            error_result = [{
+                "type": "error_message",
+                "message": f"SQL执行失败: {str(e)}",
+                "status": "error",
+                "details": traceback.format_exc()
+            }]
+            
+            return False, error_result, str(e)
 
     def execute_sql_with_details(self, sql: str) -> Dict[str, Any]:
         """
@@ -237,7 +368,9 @@ class UnifiedSQLProcessor:
                 elif quad.op == "DROP_TABLE":
                     result = self._execute_drop_table(quad)
                 elif quad.op == "ALTER_TABLE_ADD":
-                    result = self._execute_alter_table(quad)
+                    result = self._execute_alter_table_add(quad)
+                elif quad.op == "ALTER_TABLE_DROP":
+                    result = self._execute_alter_table_drop(quad)
                 elif quad.op == "CREATE_INDEX":
                     result = self._execute_create_index(quad)
                 elif quad.op == "DROP_INDEX":
@@ -325,9 +458,9 @@ class UnifiedSQLProcessor:
             success = self.storage_engine.create_table(table_name, columns)
             
             if success:
-                return {"message": f"Table '{table_name}' created successfully"}
+                return {"message": f"表 '{table_name}' 创建成功"}
             else:
-                return {"error": f"Failed to create table '{table_name}'"}
+                return {"error": f"创建表 '{table_name}' 失败"}
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -341,14 +474,14 @@ class UnifiedSQLProcessor:
             success = self.storage_engine.drop_table(table_name)
             
             if success:
-                return {"message": f"Table '{table_name}' dropped successfully"}
+                return {"message": f"表 '{table_name}' 删除成功"}
             else:
-                return {"error": f"Failed to drop table '{table_name}'"}
+                return {"error": f"删除表 '{table_name}' 失败"}
         except Exception as e:
             return {"error": f"Error dropping table: {str(e)}"}
     
-    def _execute_alter_table(self, quad) -> Dict[str, Any]:
-        """执行修改表操作"""
+    def _execute_alter_table_add(self, quad) -> Dict[str, Any]:
+        """执行ALTER TABLE ADD COLUMN操作"""
         try:
             table_name = quad.arg1
             # 解析列定义
@@ -408,6 +541,24 @@ class UnifiedSQLProcessor:
             import traceback
             traceback.print_exc()
             return {"error": f"Error altering table: {str(e)}"}
+    
+    def _execute_alter_table_drop(self, quad) -> Dict[str, Any]:
+        """执行ALTER TABLE DROP COLUMN操作"""
+        try:
+            table_name = quad.arg1
+            column_name = quad.arg2
+            
+            # 调用存储引擎删除列
+            success = self.storage_engine.drop_column(table_name, column_name)
+            
+            if success:
+                return {"message": f"表 '{table_name}' 中的列 '{column_name}' 删除成功"}
+            else:
+                return {"error": f"删除表 '{table_name}' 中的列 '{column_name}' 失败"}
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"error": f"Error dropping column: {str(e)}"}
     
     def _execute_create_index(self, quad) -> Dict[str, Any]:
         """执行创建索引操作"""
@@ -593,9 +744,9 @@ class UnifiedSQLProcessor:
                 success = self.storage_engine.insert(table_name, record)
                 
                 if success:
-                    return {"message": f"Record inserted successfully"}
+                    return {"message": f"记录成功插入到表 '{table_name}' 中"}
                 else:
-                    return {"error": "Failed to insert record"}
+                    return {"error": f"插入记录到表 '{table_name}' 失败"}
             else:
                 return {"error": "Invalid insert format"}
         except Exception as e:

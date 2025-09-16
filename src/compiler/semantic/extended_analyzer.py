@@ -673,13 +673,69 @@ class ExtendedSemanticAnalyzer:
                 condition_str = ""
                 for grandchild in child.children:
                     if grandchild.type == ASTNodeType.CONDITION:
-                        condition_str = grandchild.value
+                        # 构建条件字符串
+                        condition_str = self._build_condition_string(grandchild)
                         break
                 
                 if condition_str:
                     having_temp = self._generate_temp()
                     self._emit('HAVING', condition_str, None, having_temp)
                     print(f"    HAVING条件: {condition_str}")
+                else:
+                    print("    警告: HAVING条件为空")
+    
+    def _build_condition_string(self, condition_node: ASTNode) -> str:
+        """递归构建条件字符串"""
+        if not condition_node:
+            return ""
+        
+        # 如果节点有直接值，返回
+        if hasattr(condition_node, 'value') and condition_node.value:
+            return str(condition_node.value)
+        
+        # 递归处理子节点
+        parts = []
+        for child in condition_node.children:
+            if child.type == ASTNodeType.AGGREGATE_FUNCTION:
+                # 处理聚合函数，如 COUNT(*)
+                func_str = self._build_aggregate_string(child)
+                if func_str:
+                    parts.append(func_str)
+            elif child.type == ASTNodeType.COMPARISON_OP:
+                # 处理比较操作符
+                if hasattr(child, 'value') and child.value:
+                    parts.append(child.value)
+            elif child.type == ASTNodeType.LITERAL:
+                # 处理字面值
+                if hasattr(child, 'value') and child.value:
+                    parts.append(str(child.value))
+            elif hasattr(child, 'value') and child.value:
+                # 处理其他有值的节点
+                parts.append(str(child.value))
+        
+        return ' '.join(parts) if parts else ""
+    
+    def _build_aggregate_string(self, agg_node: ASTNode) -> str:
+        """构建聚合函数字符串"""
+        if not agg_node or not hasattr(agg_node, 'children'):
+            return ""
+        
+        # 查找函数名和参数
+        func_name = ""
+        args = []
+        
+        for child in agg_node.children:
+            if child.type == ASTNodeType.IDENTIFIER and hasattr(child, 'value'):
+                if child.value.upper() in ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX']:
+                    func_name = child.value.upper()
+            elif hasattr(child, 'value') and child.value:
+                args.append(str(child.value))
+        
+        if func_name:
+            arg_str = ', '.join(args) if args else '*'
+            return f"{func_name}({arg_str})"
+        
+        return ""
     
     def _analyze_order_by_clause(self, node: ASTNode):
         """分析ORDER BY子句"""

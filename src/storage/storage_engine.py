@@ -105,6 +105,10 @@ class StorageEngine:
                 self._tx_undo_log.append((table_name, 'DELETE', {'where': record}))
             # 更新相关索引
             self._update_indexes_on_insert(table_name, record)
+            
+            # 立即刷新脏页以确保数据持久化
+            self.buffer_manager.flush_all_pages()
+            
             return True
         return False
     
@@ -427,6 +431,23 @@ class StorageEngine:
             
         except Exception as e:
             print(f"Error adding column: {e}")
+            return False
+    
+    def drop_column(self, table_name: str, column_name: str) -> bool:
+        """
+        从表中删除列
+        
+        Args:
+            table_name: 表名
+            column_name: 要删除的列名
+            
+        Returns:
+            是否删除成功
+        """
+        try:
+            return self.table_manager.drop_column(table_name, column_name)
+        except Exception as e:
+            print(f"Error dropping column: {e}")
             return False
     
     def create_index(self, index_name: str, table_name: str, columns: List[str], is_unique: bool = False) -> bool:

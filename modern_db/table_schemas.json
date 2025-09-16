@@ -51,67 +51,6 @@
       "created_time": "2025-09-15 00:28:27"
     },
     {
-      "table_name": "books",
-      "columns": [
-        {
-          "name": "book_id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "title",
-          "column_type": "STRING",
-          "max_length": 255,
-          "nullable": false,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "genre",
-          "column_type": "STRING",
-          "max_length": 50,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "pages",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "author_id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "publisher",
-          "column_type": "STRING",
-          "max_length": 100,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        }
-      ],
-      "primary_key": null,
-      "created_time": "2025-09-15 00:29:38"
-    },
-    {
       "table_name": "users",
       "columns": [
         {
@@ -257,6 +196,92 @@
       ],
       "primary_key": null,
       "created_time": "2025-09-15 17:14:08"
+    },
+    {
+      "table_name": "books",
+      "columns": [
+        {
+          "name": "book_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": true,
+          "is_unique": false
+        },
+        {
+          "name": "title",
+          "column_type": "STRING",
+          "max_length": 255,
+          "nullable": false,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "genre",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "pages",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "author_id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": "book_id",
+      "created_time": "2025-09-16 13:26:44"
+    },
+    {
+      "table_name": "accounts",
+      "columns": [
+        {
+          "name": "id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": true,
+          "is_unique": false
+        },
+        {
+          "name": "user_name",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "balance",
+          "column_type": "FLOAT",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": "id",
+      "created_time": "2025-09-16 15:23:44"
     }
   ],
   "table_pages": {
@@ -275,18 +300,6 @@
       23,
       25
     ],
-    "books": [
-      5,
-      6,
-      9,
-      11,
-      13,
-      15,
-      17,
-      19,
-      24,
-      26
-    ],
     "users": [
       21
     ],
@@ -295,6 +308,15 @@
     ],
     "employees": [
       58
+    ],
+    "books": [
+      59,
+      60,
+      61,
+      62
+    ],
+    "accounts": [
+      66
     ]
   }
 }

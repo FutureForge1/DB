@@ -23,6 +23,7 @@ class SemanticAnalyzer:
         self.temp_counter = 0  # 临时变量计数器
         self.current_scope = "global"  # 当前作用域
         self.storage_engine = storage_engine  # 存储引擎实例
+        self.current_table_name = None  # 存储当前分析的表名，用于WHERE子句验证
         
         # 预定义的表结构（模拟数据库schema）
         self.table_schemas = {
@@ -100,8 +101,11 @@ class SemanticAnalyzer:
             return self.quadruples
             
         except SemanticError as e:
-            print(f"❌ 语义错误: {e}")
-            return []
+            # 格式化详细的语义错误信息
+            detailed_error = e.format_message()
+            print(f"❌ 语义错误: {detailed_error}")
+            # 重新抛出异常，保留详细错误信息
+            raise SemanticError(e.error_type, detailed_error, e.line, e.column, e.context)
         except Exception as e:
             print(f"❌ 语义分析失败: {e}")
             import traceback
@@ -156,6 +160,10 @@ class SemanticAnalyzer:
             elif child.type == ASTNodeType.WHERE_CLAUSE:
                 where_result = self._analyze_node(child)
         
+        # 在获得表名和列列表后，验证列是否存在
+        if column_list_result and table_name_result:
+            self._validate_columns_in_table(column_list_result, table_name_result)
+        
         # 生成SELECT的四元式
         select_temp = self.generate_temp_var()
         self.emit_quadruple("SELECT", column_list_result, table_name_result, select_temp)
@@ -188,7 +196,7 @@ class SemanticAnalyzer:
                 if col_name == "*":
                     columns.append("*")
                 else:
-                    # 验证列名（这里简化处理，实际应该在知道表名后验证）
+                    # 先收集列名，稍后在知道表名后进行验证
                     columns.append(col_name)
         
         # 将列列表转换为字符串
@@ -212,7 +220,10 @@ class SemanticAnalyzer:
             try:
                 tables = self.storage_engine.list_tables()
                 table_exists = table_name in tables
-            except:
+                print(f"  从存储引擎查找表: {table_name} -> {table_exists}")
+                print(f"  存储引擎中的表: {tables}")
+            except Exception as e:
+                print(f"  存储引擎查询失败: {e}")
                 # 如果无法访问存储引擎，回退到静态检查
                 table_exists = table_name in self.table_schemas
         else:
@@ -229,6 +240,9 @@ class SemanticAnalyzer:
         # 添加到符号表
         self.add_symbol(table_name, "table")
         
+        # 存储当前表名，用于后续的列验证
+        self.current_table_name = table_name
+        
         print(f"  表 '{table_name}' 验证成功")
         if self.storage_engine:
             try:
@@ -241,6 +255,80 @@ class SemanticAnalyzer:
             print(f"  可用列: {', '.join(self.table_schemas[table_name]['columns'])}")
         
         return table_name
+    
+    def _validate_columns_in_table(self, columns_str: str, table_name: str):
+        """验证列是否存在于指定表中"""
+        if not columns_str or columns_str == "*":
+            return  # *通配符或空列表不需要验证
+        
+        if not self.storage_engine:
+            return  # 没有存储引擎时跳过验证
+        
+        try:
+            # 获取表信息
+            table_info = self.storage_engine.get_table_info(table_name)
+            if not table_info or 'columns' not in table_info:
+                return  # 无法获取表信息时跳过验证
+            
+            # 获取表中的所有列名
+            available_columns = [col['name'] for col in table_info['columns']]
+            
+            # 检查每个请求的列
+            requested_columns = [col.strip() for col in columns_str.split(',')]
+            for col_name in requested_columns:
+                if col_name != "*" and col_name not in available_columns:
+                    raise SemanticError(
+                        "列不存在错误",
+                        f"表 '{table_name}' 中不存在列 '{col_name}'",
+                        context=f"列验证 - 可用列: {', '.join(available_columns)}"
+                    )
+                    
+        except SemanticError:
+            raise  # 重新抛出语义错误
+        except Exception as e:
+            # 其他异常时跳过验证，不影响主流程
+            print(f"  列验证跳过: {e}")
+            return
+    
+    def _validate_column_in_condition(self, column_name: str, node: ASTNode):
+        """验证WHERE条件中的列名是否存在于当前表中"""
+        # 验证标识符或字面值类型的节点（列名可能被解析为任一类型）
+        if node.type not in [ASTNodeType.IDENTIFIER, ASTNodeType.LITERAL]:
+            return
+            
+        # 如果没有当前表名或存储引擎，跳过验证
+        if not self.current_table_name or not self.storage_engine:
+            return
+        
+        # 如果是字符串字面值（带引号），不验证（这是真正的字符串常量）
+        if (isinstance(column_name, str) and 
+            ((column_name.startswith("'") and column_name.endswith("'")) or
+             (column_name.startswith('"') and column_name.endswith('"')))):
+            return
+            
+        try:
+            # 获取表信息
+            table_info = self.storage_engine.get_table_info(self.current_table_name)
+            if not table_info or 'columns' not in table_info:
+                return  # 无法获取表信息时跳过验证
+            
+            # 获取表中的所有列名
+            available_columns = [col['name'] for col in table_info['columns']]
+            
+            # 检查列名是否存在
+            if column_name not in available_columns:
+                raise SemanticError(
+                    "列不存在错误",
+                    f"WHERE子句中的列 '{column_name}' 在表 '{self.current_table_name}' 中不存在",
+                    context=f"WHERE子句验证 - 可用列: {', '.join(available_columns)}"
+                )
+                
+        except SemanticError:
+            raise  # 重新抛出语义错误
+        except Exception as e:
+            # 其他异常时跳过验证，不影响主流程
+            print(f"  WHERE子句列验证跳过: {e}")
+            return
     
     def _analyze_where_clause(self, node: ASTNode) -> str:
         """分析WHERE子句"""
@@ -264,6 +352,9 @@ class SemanticAnalyzer:
         if len(node.children) >= 3:
             # 三元条件: operand1 operator operand2
             left_operand = self._analyze_node(node.children[0])
+            
+            # 验证左操作数（通常是列名）是否存在
+            self._validate_column_in_condition(left_operand, node.children[0])
             
             # 获取操作符，直接从节点值获取
             if hasattr(node.children[1], 'value'):

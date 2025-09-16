@@ -442,6 +442,7 @@ class DDLParser:
         """
         解析ALTER TABLE语句
         语法: ALTER TABLE table_name ADD COLUMN column_def;
+             ALTER TABLE table_name DROP COLUMN column_name;
         """
         # TABLE
         self.expect(TokenType.TABLE)
@@ -449,24 +450,24 @@ class DDLParser:
         # 表名
         table_name_token = self.expect(TokenType.IDENTIFIER)
         
-        # ADD (简化实现，只支持ADD COLUMN)
-        if not self.match(TokenType.IDENTIFIER) or self.current_token.value.upper() != 'ADD':
+        # 操作类型 (ADD 或 DROP)
+        operation = None
+        if self.match(TokenType.DROP):
+            operation = "DROP"
+            self.advance()
+        elif self.match(TokenType.IDENTIFIER) and self.current_token.value.upper() == 'ADD':
+            operation = "ADD"
+            self.advance()
+        else:
             raise SyntaxError(
-                f"Expected ADD, got {self.current_token.value}",
+                f"Expected ADD or DROP, got {self.current_token_type().value}",
                 self.current_token.line,
                 self.current_token.column
             )
-        self.advance()
         
-        # COLUMN (可选)
+        # COLUMN (可选但推荐)
         if self.match(TokenType.IDENTIFIER) and self.current_token.value.upper() == 'COLUMN':
             self.advance()
-        
-        # 列定义
-        column_def = self._parse_column_definition()
-        
-        # 分号
-        self.expect(TokenType.SEMICOLON)
         
         # 创建ALTER TABLE节点
         alter_table_node = ASTNode(ASTNodeType.SELECT_STMT)
@@ -476,12 +477,31 @@ class DDLParser:
         table_name_node = ASTNode(ASTNodeType.TABLE_NAME, table_name_token.value)
         alter_table_node.add_child(table_name_node)
         
-        # 操作类型节点
-        operation_node = ASTNode(ASTNodeType.LITERAL, "ADD_COLUMN")
-        alter_table_node.add_child(operation_node)
+        if operation == 'ADD':
+            # ADD COLUMN: 需要完整的列定义
+            column_def = self._parse_column_definition()
+            
+            # 操作类型节点
+            operation_node = ASTNode(ASTNodeType.LITERAL, "ADD_COLUMN")
+            alter_table_node.add_child(operation_node)
+            
+            # 列定义节点
+            alter_table_node.add_child(column_def)
+            
+        elif operation == 'DROP':
+            # DROP COLUMN: 只需要列名
+            column_name_token = self.expect(TokenType.IDENTIFIER)
+            
+            # 操作类型节点
+            operation_node = ASTNode(ASTNodeType.LITERAL, "DROP_COLUMN")
+            alter_table_node.add_child(operation_node)
+            
+            # 列名节点
+            column_name_node = ASTNode(ASTNodeType.IDENTIFIER, column_name_token.value)
+            alter_table_node.add_child(column_name_node)
         
-        # 列定义节点
-        alter_table_node.add_child(column_def)
+        # 分号
+        self.expect(TokenType.SEMICOLON)
         
         return alter_table_node
     

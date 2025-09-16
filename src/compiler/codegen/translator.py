@@ -91,6 +91,7 @@ class QuadrupleTranslator:
         end_quads = []
         order_by_quads = []
         group_by_quads = []
+        having_quads = []  # 添加HAVING四元式
         limit_quads = []
         offset_quads = []
         join_quads = []  # 添加JOIN四元式
@@ -116,6 +117,8 @@ class QuadrupleTranslator:
                 order_by_quads.append(quad)
             elif quad.op == 'GROUP_BY':
                 group_by_quads.append(quad)
+            elif quad.op == 'HAVING':
+                having_quads.append(quad)
             elif quad.op == 'LIMIT':
                 limit_quads.append(quad)
             elif quad.op == 'OFFSET':
@@ -126,7 +129,7 @@ class QuadrupleTranslator:
                 other_quads.append(quad)
         
         # 按正确执行顺序生成目标指令
-        # BEGIN -> OPEN/SCAN -> JOIN -> 聚合函数 -> GROUP BY -> ORDER BY -> LIMIT/OFFSET -> PROJECT -> OUTPUT -> END
+        # BEGIN -> OPEN/SCAN -> JOIN -> 聚合函数 -> GROUP BY -> HAVING -> ORDER BY -> LIMIT/OFFSET -> PROJECT -> OUTPUT -> END
         
         # 生成BEGIN指令
         for quad in begin_quads:
@@ -153,6 +156,16 @@ class QuadrupleTranslator:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
+        # 生成PROJECT指令（在HAVING之前，因为HAVING需要访问聚合结果）
+        for quad in project_quads:
+            print(f"翻译四元式: {quad}")
+            self._translate_quadruple(quad)
+        
+        # 生成HAVING指令（在聚合函数和PROJECT之后执行）
+        for quad in having_quads:
+            print(f"翻译四元式: {quad}")
+            self._translate_quadruple(quad)
+        
         # 生成ORDER BY指令
         for quad in order_by_quads:
             print(f"翻译四元式: {quad}")
@@ -160,11 +173,6 @@ class QuadrupleTranslator:
         
         # 生成LIMIT/OFFSET指令
         for quad in limit_quads + offset_quads:
-            print(f"翻译四元式: {quad}")
-            self._translate_quadruple(quad)
-        
-        # 生成PROJECT指令
-        for quad in project_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
@@ -694,7 +702,7 @@ class QuadrupleTranslator:
             
         self.target_gen.emit_order_by(source_reg, column_and_direction, result_reg)
     
-    def _translate_having(self, source: str, condition: str, result: str):
+    def _translate_having(self, condition: str, source: str, result: str):
         """翻译HAVING操作"""
         print(f"  → HAVING {condition}")
         

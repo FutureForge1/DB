@@ -117,7 +117,10 @@ class ExecutionEngine:
             TargetInstructionType.LIMIT: self._execute_limit,
             TargetInstructionType.OFFSET: self._execute_offset,
             # 其他指令
-            TargetInstructionType.MOVE: self._execute_move
+            TargetInstructionType.MOVE: self._execute_move,
+            # 控制流指令
+            TargetInstructionType.BEGIN: self._execute_begin,
+            TargetInstructionType.END: self._execute_end
         }
     
     def set_index_mode(self, use_index: bool):
@@ -1485,16 +1488,39 @@ class ExecutionEngine:
         condition = instruction.operands[0]
         print(f"  → HAVING {condition}: 对分组结果进行过滤")
         
-        # HAVING用于对分组后的结果进行过滤
-        # 这里实现一个简化的HAVING条件处理逻辑
-        filtered_groups = {}
-        
         # 检查条件是否为空
-        if condition is None:
+        if condition is None or condition == "None":
             print(f"    警告: HAVING条件为空")
             return
         
-        # 简化的条件解析，支持 COUNT(*) > 1 这样的条件
+        # HAVING需要从之前的聚合结果中读取数据
+        # 通常聚合结果在前一个寄存器中（如R5），而HAVING结果寄存器是R6
+        aggregated_results = None
+        
+        # 首先尝试从上下文中获取最新的聚合结果
+        if hasattr(self.context, 'last_aggregated_results'):
+            aggregated_results = self.context.last_aggregated_results
+        else:
+            # 如果没有，尝试从寄存器中找到聚合结果
+            # 按寄存器编号倒序查找，找到第一个包含列表数据的寄存器
+            valid_reg_names = [name for name in self.context.registers.keys() if name is not None]
+            for reg_name in sorted(valid_reg_names, reverse=True):
+                if reg_name != instruction.result:  # 跳过自己的结果寄存器
+                    reg_value = self.context.registers[reg_name]
+                    if isinstance(reg_value, list) and reg_value:
+                        # 检查是否包含聚合结果（有类似book_count的字段）
+                        if all(isinstance(item, dict) for item in reg_value):
+                            aggregated_results = reg_value
+                            print(f"    从寄存器 {reg_name} 获取聚合结果")
+                            break
+        
+        if not aggregated_results:
+            print(f"    警告: 无法找到聚合结果")
+            return
+        
+        # 简化的条件解析，支持 COUNT(*) > 2 这样的条件
+        filtered_results = []
+        
         if '>' in condition:
             parts = condition.split('>')
             left_part = parts[0].strip()
@@ -1509,43 +1535,32 @@ class ExecutionEngine:
             
             # 处理聚合函数条件
             if 'COUNT' in left_part:
-                # 对每个分组检查COUNT是否满足条件
-                for group_key, records in self.context.groups.items():
-                    count = len(records)
-                    if count > threshold:
-                        filtered_groups[group_key] = records
-            elif 'SUM' in left_part:
-                # 处理SUM条件
-                column = left_part.replace('SUM(', '').replace(')', '').strip()
-                for group_key, records in self.context.groups.items():
-                    total = sum(record.get(column, 0) for record in records if record.get(column) is not None)
-                    if total > threshold:
-                        filtered_groups[group_key] = records
-            elif 'AVG' in left_part:
-                # 处理AVG条件
-                column = left_part.replace('AVG(', '').replace(')', '').replace('(', '').strip()
-                for group_key, records in self.context.groups.items():
-                    total = sum(record.get(column, 0) for record in records if record.get(column) is not None)
-                    count = sum(1 for record in records if record.get(column) is not None)
-                    avg = total / count if count > 0 else 0
-                    if avg > threshold:
-                        filtered_groups[group_key] = records
+                # 过滤COUNT结果
+                for result in aggregated_results:
+                    if isinstance(result, dict):
+                        # 查找包含count的字段
+                        count_value = None
+                        for key, value in result.items():
+                            if 'count' in key.lower() or key.lower() == 'book_count':
+                                count_value = value
+                                break
+                        
+                        if count_value is not None and count_value > threshold:
+                            filtered_results.append(result)
+                            
+            print(f"    过滤前: {len(aggregated_results)} 条记录")
+            print(f"    过滤后: {len(filtered_results)} 条记录")
+            
+            # 更新结果寄存器
+            result_reg = instruction.result
+            if result_reg:
+                self.context.registers[result_reg] = filtered_results
+            
+            # 也更新上下文中的结果
+            if hasattr(self.context, 'last_aggregated_results'):
+                self.context.last_aggregated_results = filtered_results
         else:
-            # 默认保持所有分组
-            filtered_groups = self.context.groups
-        
-        # 更新分组信息
-        self.context.groups = filtered_groups
-        
-        # 将分组结果转换为记录列表
-        filtered_records = []
-        for group_key, records in filtered_groups.items():
-            # 取第一个记录作为代表
-            if records:
-                filtered_records.extend(records)
-        
-        self.context.current_records = filtered_records
-        print(f"    过滤后保留 {len(filtered_groups)} 个分组，共 {len(filtered_records)} 条记录")
+            print(f"    不支持的条件格式: {condition}")
     
     def _execute_begin(self, instruction: TargetInstruction) -> None:
         """执行BEGIN指令 - 开始执行"""

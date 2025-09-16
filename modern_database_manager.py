@@ -723,43 +723,12 @@ class ModernDatabaseManager:
         self.sql_highlighter = SQLSyntaxHighlighter(self.sql_text, self.colors)
 
         # 示例SQL语句 - 展示语法高亮效果
-        sample_sql = """-- 🚀 现代化数据库管理系统 - SQL示例
--- 展示完整的语法高亮效果
-
-/* 1. 创建用户表 */
-CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTO_INCREMENT,
-    name VARCHAR(50) NOT NULL,
-    email VARCHAR(100) UNIQUE,
-    age INTEGER DEFAULT 18,
-    salary DECIMAL(10,2),
-    created_at TIMESTAMP DEFAULT NOW()
+        sample_sql = """  -- 创建作者表 (authors)
+CREATE TABLE authors (
+    author_id INT PRIMARY KEY, -- 作者ID, 主键
+    author_name VARCHAR(100) NOT NULL UNIQUE  -- 作者姓名, 不能为空, 且唯一
 );
-
--- 2. 插入示例数据
-INSERT INTO users (name, email, age, salary) VALUES 
-    ('Alice Johnson', 'alice@example.com', 25, 5500.00),
-    ('Bob Smith', 'bob@company.org', 30, 6200.50),
-    ('Carol Davis', 'carol@tech.net', 28, 5800.75);
-
--- 3. 复杂查询示例
-SELECT 
-    u.name,
-    u.email,
-    u.age,
-    CASE 
-        WHEN u.salary > 6000 THEN 'High'
-        WHEN u.salary > 5500 THEN 'Medium'
-        ELSE 'Low'
-    END AS salary_level,
-    UPPER(u.name) AS name_upper,
-    COUNT(*) OVER() as total_users
-FROM users u
-WHERE u.age BETWEEN 20 AND 35
-    AND u.email LIKE '%@%.%'
-    AND u.salary IS NOT NULL
-ORDER BY u.salary DESC, u.name ASC
-LIMIT 10;"""
+"""
 
         self.sql_text.insert(tk.END, sample_sql)
         
@@ -923,15 +892,7 @@ LIMIT 10;"""
         self.compiler_sql_highlighter = SQLSyntaxHighlighter(self.compiler_sql_text, self.colors)
 
         # 示例SQL - 编译器分析示例
-        compiler_sample = """-- SQL编译器分析示例
-SELECT 
-    u.name,
-    u.age,
-    UPPER(u.email) AS email_upper
-FROM users u 
-WHERE u.age > 25 
-    AND u.name IS NOT NULL
-ORDER BY u.age DESC;"""
+        compiler_sample = """  """
         
         self.compiler_sql_text.insert(tk.END, compiler_sample)
         
@@ -3439,6 +3400,9 @@ ORDER BY u.age DESC;"""
 
     def run(self):
         """运行应用"""
+        # 注册关闭时的清理回调
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+        
         # 初始化显示
         self._refresh_tables()
         self._refresh_storage_stats()
@@ -3466,6 +3430,26 @@ ORDER BY u.age DESC;"""
 
         # 启动主循环
         self.root.mainloop()
+
+    def _on_closing(self):
+        """应用关闭时的清理工作"""
+        try:
+            print("🔄 正在保存数据...")
+            # 刷新所有脏页到磁盘
+            if self.storage_engine:
+                flushed_pages = self.storage_engine.flush_all()
+                print(f"✅ 已保存 {flushed_pages} 个页面到磁盘")
+                
+                # 可选：显示保存状态给用户
+                if flushed_pages > 0:
+                    self._update_status(f"已保存 {flushed_pages} 个页面到磁盘")
+            
+            print("👋 应用正常关闭")
+        except Exception as e:
+            print(f"❌ 关闭时保存数据失败: {e}")
+        finally:
+            # 确保窗口正常关闭
+            self.root.destroy()
 
 
 class CreateTableDialog:
