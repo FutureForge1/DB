@@ -74,7 +74,7 @@ class QuadrupleTranslator:
         self.temp_var_mapping.clear()
         self.opened_tables.clear()
         # 注意：不要清空aggregate_aliases，因为它可能在执行过程中被使用
-        # self.aggregate_aliases.clear()  # 这行被注释掉了
+        # self.aggregate_aliases.clear()
         
         print(f"  翻译开始时aggregate_aliases状态: {self.aggregate_aliases}")
         
@@ -409,7 +409,7 @@ class QuadrupleTranslator:
                 agg_quad = aggregate_quads[0]  # 取第一个聚合函数
                 if agg_quad.result in self.temp_var_mapping:
                     aggregate_result_reg = self.temp_var_mapping[agg_quad.result]
-                    print(f"    聚合函数结果寄存器: {aggregate_result_reg}")
+                    print(f"聚合函数结果寄存器: {aggregate_result_reg}")
                     
                     # 检查是否是多列投影（包含分组列的GROUP BY查询）
                     column_list = [col.strip() for col in columns.split(',')]

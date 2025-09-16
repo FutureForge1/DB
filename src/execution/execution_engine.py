@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from src.compiler.codegen.target_instructions import TargetInstruction, TargetInstructionType
 from src.storage.storage_engine import StorageEngine
 from src.storage.table.table_manager import ColumnType
+from src.execution.query_optimizer import QueryOptimizer, OptimizationStats
 
 @dataclass
 class ExecutionContext:
@@ -27,6 +28,8 @@ class ExecutionContext:
     groups: Dict[tuple, List[Dict[str, Any]]] = None  # 分组数据
     group_columns: List[str] = None  # 分组列
     join_tables: List[str] = None  # 参与连接的表
+    # 索引相关
+    use_index: bool = True  # 是否使用索引
     
     def __post_init__(self):
         if self.current_records is None:
@@ -54,6 +57,8 @@ class ExecutionEngine:
         """
         self.storage_engine = storage_engine or StorageEngine()
         self.context = ExecutionContext()
+        self.optimizer = QueryOptimizer(self.storage_engine)
+        self.enable_optimization = True
         
         # 执行统计
         self.stats = {
@@ -62,7 +67,9 @@ class ExecutionEngine:
             'tables_opened': 0,
             'records_scanned': 0,
             'records_filtered': 0,
-            'records_output': 0
+            'records_output': 0,
+            'optimizations_applied': 0,
+            'optimization_time': 0.0
         }
         
         # 添加LIMIT和OFFSET相关属性
@@ -97,22 +104,45 @@ class ExecutionEngine:
             TargetInstructionType.LEFT_JOIN: self._execute_left_join,
             TargetInstructionType.RIGHT_JOIN: self._execute_right_join,
             TargetInstructionType.FULL_JOIN: self._execute_full_join,
+            # 聚合函数指令
             TargetInstructionType.COUNT: self._execute_count,
-            TargetInstructionType.SUM: self._execute_sum,
             TargetInstructionType.AVG: self._execute_avg,
-            TargetInstructionType.MAX: self._execute_max,
+            TargetInstructionType.SUM: self._execute_sum,
             TargetInstructionType.MIN: self._execute_min,
+            TargetInstructionType.MAX: self._execute_max,
+            # 其他指令
             TargetInstructionType.GROUP_BY: self._execute_group_by,
             TargetInstructionType.ORDER_BY: self._execute_order_by,
             TargetInstructionType.HAVING: self._execute_having,
-            # 控制流指令
-            TargetInstructionType.BEGIN: self._execute_begin,
-            TargetInstructionType.END: self._execute_end,
-            # 限制指令
             TargetInstructionType.LIMIT: self._execute_limit,
             TargetInstructionType.OFFSET: self._execute_offset,
-            # 新增MOVE指令
-            TargetInstructionType.MOVE: self._execute_move,
+            # 其他指令
+            TargetInstructionType.MOVE: self._execute_move
+        }
+    
+    def set_index_mode(self, use_index: bool):
+        """设置是否使用索引查询"""
+        self.context.use_index = use_index
+    
+    def set_optimization_enabled(self, enabled: bool):
+        """启用或禁用查询优化"""
+        self.enable_optimization = enabled
+        print(f"查询优化已{'启用' if enabled else '禁用'}")
+    
+    def configure_optimizer(self, **kwargs):
+        """配置优化器选项"""
+        if self.optimizer:
+            for key, value in kwargs.items():
+                if hasattr(self.optimizer, key):
+                    setattr(self.optimizer, key, value)
+                    print(f"优化器配置: {key} = {value}")
+    
+    def get_optimization_stats(self) -> Dict[str, Any]:
+        """获取优化统计信息"""
+        return {
+            'optimizations_applied': self.stats['optimizations_applied'],
+            'optimization_time': self.stats['optimization_time'],
+            'optimization_enabled': self.enable_optimization
         }
     
     def execute(self, instructions: List[TargetInstruction], translator=None) -> List[Dict[str, Any]]:
@@ -130,6 +160,23 @@ class ExecutionEngine:
         results = []
         
         try:
+            # 应用查询优化
+            optimized_instructions = instructions
+            optimization_stats = None
+            
+            if self.enable_optimization and self.optimizer:
+                optimized_instructions, optimization_stats = self.optimizer.optimize(instructions)
+                self.stats['optimizations_applied'] += len(optimization_stats.optimizations_applied)
+                self.stats['optimization_time'] += optimization_stats.optimization_time
+                
+                # 打印优化信息
+                if optimization_stats.optimizations_applied:
+                    print(f"🚀 查询优化: 应用了 {len(optimization_stats.optimizations_applied)} 项优化")
+                    print(f"   优化策略: {', '.join(optimization_stats.optimizations_applied)}")
+                    print(f"   指令数量: {optimization_stats.original_instructions} → {optimization_stats.optimized_instructions}")
+                    if optimization_stats.estimated_cost_reduction > 0:
+                        print(f"   估算性能提升: {optimization_stats.estimated_cost_reduction:.1f}%")
+            
             # 重置执行上下文
             self.context = ExecutionContext()
             instruction_pointer = 0
@@ -142,11 +189,13 @@ class ExecutionEngine:
                     self.table_alias_mapping = translator.table_alias_mapping.copy()
                     print(f"  → 从translator获取表别名映射: {self.table_alias_mapping}")
             
-            print(f"\n开始执行 {len(instructions)} 条目标指令:")
+            print(f"\n开始执行 {len(optimized_instructions)} 条目标指令:")
+            if optimization_stats and optimization_stats.optimizations_applied:
+                print(f"(已应用优化: {', '.join(optimization_stats.optimizations_applied)})")
             print("-" * 60)
             
-            while instruction_pointer < len(instructions):
-                instruction = instructions[instruction_pointer]
+            while instruction_pointer < len(optimized_instructions):
+                instruction = optimized_instructions[instruction_pointer]
                 
                 # 过滤掉None值
                 operands_str = ' '.join(str(op) for op in instruction.operands if op is not None)
@@ -204,12 +253,16 @@ class ExecutionEngine:
         if not self.context.current_table:
             raise RuntimeError("No table opened for SCAN operation")
         
-        # 从存储引擎获取所有记录
-        records = self.storage_engine.select(self.context.current_table)
+        # 从存储引擎获取所有记录，传递索引使用设置
+        records = self.storage_engine.select(
+            self.context.current_table, 
+            use_index=self.context.use_index
+        )
         self.context.current_records = records
         self.stats['records_scanned'] += len(records)
         
-        print(f"  → 扫描到 {len(records)} 条记录")
+        index_status = "（使用索引）" if self.context.use_index else "（全表扫描）"
+        print(f"  → 扫描到 {len(records)} 条记录 {index_status}")
     
     def _execute_filter(self, instruction: TargetInstruction) -> None:
         """执行FILTER指令 - 过滤记录"""
@@ -397,18 +450,31 @@ class ExecutionEngine:
             print(f"    记录中的键: {list(record.keys())}")
             
             for column in column_list:
+                # 特殊处理：如果列是 * 通配符，包含所有列
+                if column == "*":
+                    projected_record = record.copy()
+                    print(f"    使用 * 通配符，包含所有列: {list(record.keys())}")
+                    break  # * 包含所有列，不需要继续处理其他列
                 # 特殊处理：如果列是表别名.列名的形式
                 if '.' in column:
                     alias, col_name = column.split('.', 1)
                     # 查找匹配的记录字段
                     found = False
                     for key in record.keys():
-                        # 检查键是否以"表名.列名"或"别名.列名"的形式存在
-                        if key.endswith(f".{col_name}"):
+                        # 检查键是否完全匹配"表名.列名"的形式
+                        if key == column:
                             projected_record[column] = record[key]
-                            print(f"    匹配列 {column}: {record[key]} (来自 {key})")
+                            print(f"    完全匹配列 {column}: {record[key]} (来自 {key})")
                             found = True
                             break
+                        # 如果没有完全匹配，检查是否是表别名匹配
+                        elif '.' in key:
+                            key_table, key_col = key.split('.', 1)
+                            if key_table == alias and key_col == col_name:
+                                projected_record[column] = record[key]
+                                print(f"    表别名匹配列 {column}: {record[key]} (来自 {key})")
+                                found = True
+                                break
                     
                     if not found:
                         # 尝试直接匹配
@@ -1422,6 +1488,11 @@ class ExecutionEngine:
         # HAVING用于对分组后的结果进行过滤
         # 这里实现一个简化的HAVING条件处理逻辑
         filtered_groups = {}
+        
+        # 检查条件是否为空
+        if condition is None:
+            print(f"    警告: HAVING条件为空")
+            return
         
         # 简化的条件解析，支持 COUNT(*) > 1 这样的条件
         if '>' in condition:

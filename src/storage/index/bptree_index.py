@@ -397,6 +397,158 @@ class BPTreeIndex:
         
         return result
     
+    def search_by_condition(self, key: Any, operator: str) -> List[int]:
+        """
+        基于条件的查询
+        
+        Args:
+            key: 查询键
+            operator: 操作符 ('=', '>', '<', '>=', '<=', '!=')
+            
+        Returns:
+            记录ID列表
+        """
+        if self.root_page_id is None:
+            return []
+        
+        if operator == '=':
+            return self.search(key)
+        elif operator == '>':
+            return self._search_greater_than(key, inclusive=False)
+        elif operator == '>=':
+            return self._search_greater_than(key, inclusive=True)
+        elif operator == '<':
+            return self._search_less_than(key, inclusive=False)
+        elif operator == '<=':
+            return self._search_less_than(key, inclusive=True)
+        elif operator == '!=' or operator == '<>':
+            return self._search_not_equal(key)
+        else:
+            raise ValueError(f"不支持的操作符: {operator}")
+    
+    def _search_greater_than(self, key: Any, inclusive: bool = False) -> List[int]:
+        """搜索大于(或等于)指定键的所有记录"""
+        if self.root_page_id is None:
+            return []
+        
+        result = []
+        # 找到起始叶子节点
+        start_node = self._find_leaf_node(self.root_page_id, key)
+        
+        if not start_node:
+            return []
+        
+        # 从起始节点开始向右遍历
+        current_node = start_node
+        found_start = False
+        
+        while current_node:
+            for i, node_key in enumerate(current_node.keys):
+                comparison = _compare_keys(node_key, key)
+                
+                if not found_start:
+                    if comparison > 0 or (inclusive and comparison == 0):
+                        found_start = True
+                        result.append(current_node.children[i])
+                    elif comparison == 0 and not inclusive:
+                        found_start = True
+                        # 跳过等于的值
+                        continue
+                else:
+                    # 已经找到起始点，添加所有后续值
+                    result.append(current_node.children[i])
+            
+            # 移动到下一个叶子节点
+            if current_node.next_leaf:
+                current_node = self._load_node(current_node.next_leaf)
+            else:
+                break
+        
+        return result
+    
+    def _search_less_than(self, key: Any, inclusive: bool = False) -> List[int]:
+        """搜索小于(或等于)指定键的所有记录"""
+        if self.root_page_id is None:
+            return []
+        
+        result = []
+        # 找到最左边的叶子节点
+        leftmost_node = self._find_leftmost_leaf()
+        
+        if not leftmost_node:
+            return []
+        
+        # 从最左边开始向右遍历，直到找到第一个大于key的值
+        current_node = leftmost_node
+        
+        while current_node:
+            should_continue = False
+            for i, node_key in enumerate(current_node.keys):
+                comparison = _compare_keys(node_key, key)
+                
+                if comparison < 0 or (inclusive and comparison == 0):
+                    result.append(current_node.children[i])
+                    should_continue = True
+                elif comparison == 0 and not inclusive:
+                    should_continue = True
+                else:
+                    # 找到第一个大于key的值，停止搜索
+                    return result
+            
+            # 移动到下一个叶子节点
+            if should_continue and current_node.next_leaf:
+                current_node = self._load_node(current_node.next_leaf)
+            else:
+                break
+        
+        return result
+    
+    def _search_not_equal(self, key: Any) -> List[int]:
+        """搜索不等于指定键的所有记录"""
+        result = []
+        # 找到最左边的叶子节点
+        leftmost_node = self._find_leftmost_leaf()
+        
+        if not leftmost_node:
+            return []
+        
+        # 遍历所有叶子节点
+        current_node = leftmost_node
+        
+        while current_node:
+            for i, node_key in enumerate(current_node.keys):
+                comparison = _compare_keys(node_key, key)
+                if comparison != 0:
+                    result.append(current_node.children[i])
+            
+            # 移动到下一个叶子节点
+            if current_node.next_leaf:
+                current_node = self._load_node(current_node.next_leaf)
+            else:
+                break
+        
+        return result
+    
+    def _find_leftmost_leaf(self) -> Optional[BPTreeNode]:
+        """找到最左边的叶子节点"""
+        if self.root_page_id is None:
+            return None
+        
+        current = self._load_node(self.root_page_id)
+        if not current:
+            return None
+        
+        # 一直向左走到叶子节点
+        while not current.is_leaf:
+            if current.children:
+                current = self._load_node(current.children[0])
+                if not current:
+                    return None
+            else:
+                return None
+        
+        return current
+    
     def range_search(self, start_key: Any, end_key: Any) -> List[int]:
         """
         范围搜索

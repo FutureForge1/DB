@@ -240,6 +240,16 @@ class UnifiedSQLProcessor:
                     result = self._execute_alter_table(quad)
                 elif quad.op == "CREATE_INDEX":
                     result = self._execute_create_index(quad)
+                elif quad.op == "DROP_INDEX":
+                    result = self._execute_drop_index(quad)
+                elif quad.op == "SHOW_INDEX":
+                    result = self._execute_show_index(quad)
+                elif quad.op == "BEGIN":
+                    result = self._execute_begin()
+                elif quad.op == "COMMIT":
+                    result = self._execute_commit()
+                elif quad.op == "ROLLBACK":
+                    result = self._execute_rollback()
                 elif quad.op == "INSERT":
                     result = self._execute_insert(quad)
                 elif quad.op == "UPDATE":
@@ -422,6 +432,58 @@ class UnifiedSQLProcessor:
                 return {"error": "Invalid index format"}
         except Exception as e:
             return {"error": f"Error creating index: {str(e)}"}
+
+    def _execute_drop_index(self, quad) -> Dict[str, Any]:
+        """执行删除索引操作"""
+        try:
+            index_name = quad.arg1
+            success = self.storage_engine.drop_index(index_name)
+            if success:
+                return {"message": f"Index '{index_name}' dropped successfully"}
+            return {"error": f"Failed to drop index '{index_name}'"}
+        except Exception as e:
+            return {"error": f"Error dropping index: {str(e)}"}
+
+    def _execute_show_index(self, quad) -> Dict[str, Any]:
+        """执行显示索引操作（按表过滤）"""
+        try:
+            table_name = quad.arg1
+            all_indexes = self.storage_engine.list_indexes()
+            # 过滤属于该表的索引
+            result_rows = []
+            for idx_name in all_indexes:
+                idx = self.storage_engine.get_index(idx_name)
+                if idx and getattr(idx, 'table_name', None) == table_name:
+                    result_rows.append({
+                        'index_name': idx_name,
+                        'table_name': idx.table_name,
+                        'columns': ','.join(getattr(idx, 'columns', []) or [])
+                    })
+            return {"results": result_rows}
+        except Exception as e:
+            return {"error": f"Error showing indexes: {str(e)}"}
+
+    # 事务接口
+    def _execute_begin(self) -> Dict[str, Any]:
+        try:
+            self.storage_engine.begin_transaction()
+            return {"message": "Transaction started"}
+        except Exception as e:
+            return {"error": f"Error begin transaction: {str(e)}"}
+
+    def _execute_commit(self) -> Dict[str, Any]:
+        try:
+            self.storage_engine.commit_transaction()
+            return {"message": "Transaction committed"}
+        except Exception as e:
+            return {"error": f"Error commit: {str(e)}"}
+
+    def _execute_rollback(self) -> Dict[str, Any]:
+        try:
+            self.storage_engine.rollback_transaction()
+            return {"message": "Transaction rolled back"}
+        except Exception as e:
+            return {"error": f"Error rollback: {str(e)}"}
     
     def _execute_insert(self, quad) -> Dict[str, Any]:
         """执行插入操作"""

@@ -56,7 +56,8 @@ class UnifiedSQLParser:
             elif self.sql_type == "DML":
                 return self._parse_dml(), self.sql_type
             else:
-                raise SyntaxError(f"Unsupported SQL type: {self.sql_type}")
+                self._provide_sql_suggestion(self.sql_type)
+                raise SyntaxError(f"不支持的SQL语句类型: {self.sql_type}")
                 
         except Exception as e:
             raise SyntaxError(f"SQL parsing failed: {e}")
@@ -77,8 +78,9 @@ class UnifiedSQLParser:
         if first_token.type == TokenType.SELECT:
             return "SELECT"
         
-        # DDL语句
-        if first_token.type in [TokenType.CREATE, TokenType.DROP, TokenType.ALTER]:
+        # DDL语句（含事务控制）
+        if first_token.type in [TokenType.CREATE, TokenType.DROP, TokenType.ALTER, TokenType.SHOW,
+                                 TokenType.BEGIN, TokenType.COMMIT, TokenType.ROLLBACK]:
             return "DDL"
         
         # DML语句
@@ -86,6 +88,35 @@ class UnifiedSQLParser:
             return "DML"
         
         return "UNKNOWN"
+    
+    def _provide_sql_suggestion(self, sql_type: str):
+        """为无法识别的SQL提供建议"""
+        if not self.tokens:
+            print("💡 提示: 请输入有效的SQL语句")
+            return
+            
+        first_token = self.tokens[0].value.upper()
+        suggestions = {
+            'SELEC': 'SELECT',
+            'FORM': 'FROM', 
+            'WERE': 'WHERE',
+            'CREAT': 'CREATE',
+            'DELET': 'DELETE',
+            'UPDAT': 'UPDATE',
+            'INSER': 'INSERT'
+        }
+        
+        if first_token in suggestions:
+            print(f"💡 提示: 您是否想要输入 '{suggestions[first_token]}' 而不是 '{first_token}'?")
+        else:
+            print(f"💡 提示: 无法识别的SQL关键字 '{first_token}'")
+            print("   支持的SQL语句类型:")
+            print("   - SELECT: 查询数据")
+            print("   - INSERT: 插入数据") 
+            print("   - UPDATE: 更新数据")
+            print("   - DELETE: 删除数据")
+            print("   - CREATE: 创建表/索引")
+            print("   - DROP: 删除表/索引")
     
     def _parse_select(self) -> Optional[ASTNode]:
         """解析SELECT语句"""
@@ -119,7 +150,8 @@ class UnifiedSQLParser:
         complex_keywords = {
             'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL',
             'COUNT', 'SUM', 'AVG', 'MAX', 'MIN',
-            'GROUP', 'ORDER', 'HAVING', 'ASC', 'DESC'
+            'GROUP', 'ORDER', 'HAVING', 'ASC', 'DESC',
+            'LIMIT', 'OFFSET'
         }
         
         # 检查是否有复杂查询关键字
@@ -146,55 +178,3 @@ class UnifiedSQLParser:
         return self.tokens
 
 
-def test_unified_parser():
-    """测试统一SQL分析器"""
-    print("=" * 80)
-    print("              统一SQL分析器测试")
-    print("=" * 80)
-    
-    test_cases = [
-        # SELECT查询
-        ("SELECT * FROM students;", "基础SELECT查询"),
-        ("SELECT name, age FROM students WHERE age > 20;", "带WHERE的SELECT查询"),
-        ("SELECT COUNT(*) FROM students;", "复杂SELECT查询"),
-        
-        # DDL语句
-        ("CREATE TABLE products (id INT PRIMARY KEY, name VARCHAR(255));", "CREATE TABLE"),
-        ("DROP TABLE products;", "DROP TABLE"),
-        ("ALTER TABLE products ADD COLUMN price DECIMAL(10,2);", "ALTER TABLE"),
-        ("CREATE INDEX idx_name ON products (name);", "CREATE INDEX"),
-        
-        # DML语句
-        ("INSERT INTO products VALUES (1, 'Laptop', 999.99);", "INSERT"),
-        ("UPDATE products SET price = 899.99 WHERE id = 1;", "UPDATE"),
-        ("DELETE FROM products WHERE price > 1000;", "DELETE"),
-    ]
-    
-    for i, (sql, description) in enumerate(test_cases, 1):
-        print(f"\\n测试用例 {i}: {description}")
-        print(f"SQL: {sql}")
-        print("-" * 60)
-        
-        try:
-            parser = UnifiedSQLParser(sql)
-            ast, sql_type = parser.parse()
-            
-            if ast:
-                print(f"✅ 解析成功")
-                print(f"   SQL类型: {sql_type}")
-                print(f"   AST根节点: {ast.type.value}")
-                print(f"   操作类型: {ast.value}")
-                print(f"   子节点数: {len(ast.children)}")
-            else:
-                print(f"❌ 解析失败: AST为空")
-                
-        except Exception as e:
-            print(f"❌ 解析失败: {e}")
-    
-    print(f"\\n{'='*80}")
-    print("统一SQL分析器测试完成")
-    print(f"{'='*80}")
-
-
-if __name__ == "__main__":
-    test_unified_parser()

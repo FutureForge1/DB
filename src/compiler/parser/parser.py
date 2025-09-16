@@ -87,7 +87,7 @@ class Parser:
                     else:
                         # 匹配失败
                         raise SyntaxError(
-                            f"Expected '{stack_top}', found '{current_input}'",
+                            f"期待的是 '{stack_top}', 发现的是 '{current_input}'",
                             self.current_token.line if self.current_token else 0,
                             self.current_token.column if self.current_token else 0
                         )
@@ -97,7 +97,7 @@ class Parser:
                     
                     if production is None:
                         raise SyntaxError(
-                            f"No production for {stack_top} with input {current_input}",
+                            f"对于非终结符 '{stack_top}' 和输入 '{current_input}'，找不到匹配的语法规则",
                             self.current_token.line if self.current_token else 0,
                             self.current_token.column if self.current_token else 0
                         )
@@ -113,10 +113,10 @@ class Parser:
                 
                 # 记录分析步骤
                 self.parse_steps.append({
-                    'step': step,
-                    'stack': stack_display,
-                    'input': remaining_input,
-                    'action': action
+                    '步骤号': step,
+                    '分析栈': stack_display,
+                    '剩余输入': remaining_input,
+                    '执行动作': action
                 })
                 
                 print(f"{step:<4} {stack_display:<30} {remaining_input:<25} {action:<20}")

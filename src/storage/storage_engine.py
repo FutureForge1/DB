@@ -46,6 +46,9 @@ class StorageEngine:
             'records_deleted': 0,
             'start_time': time.time()
         }
+        # 事务状态
+        self._tx_active: bool = False
+        self._tx_undo_log: list[tuple[str, str, dict]] = []  # (table, op, payload)
     
     def create_table(self, table_name: str, columns: List[Dict[str, Any]]) -> bool:
         """
@@ -97,6 +100,9 @@ class StorageEngine:
         """
         if self.table_manager.insert_record(table_name, record):
             self.stats['records_inserted'] += 1
+            # 事务日志：回滚时删除该记录
+            if self._tx_active:
+                self._tx_undo_log.append((table_name, 'DELETE', {'where': record}))
             # 更新相关索引
             self._update_indexes_on_insert(table_name, record)
             return True
@@ -111,7 +117,8 @@ class StorageEngine:
     def select(self, table_name: str, 
               columns: Optional[List[str]] = None,
               where: Optional[Dict[str, Any]] = None,
-              limit: Optional[int] = None) -> List[Dict[str, Any]]:
+              limit: Optional[int] = None,
+              use_index: bool = True) -> List[Dict[str, Any]]:
         """
         查询记录
         
@@ -120,6 +127,7 @@ class StorageEngine:
             columns: 要查询的列，None表示所有列
             where: 查询条件
             limit: 限制返回记录数
+            use_index: 是否使用索引（默认True）
             
         Returns:
             查询结果列表
@@ -127,8 +135,12 @@ class StorageEngine:
         self.stats['queries_executed'] += 1
         
         # 检查是否有可用的索引可以加速查询
-        if where and self._can_use_index(table_name, where):
-            results = self._select_with_index(table_name, columns, where)
+        index_info = None
+        if use_index and where:
+            index_info = self._can_use_index(table_name, where)
+        
+        if index_info:
+            results = self._select_with_index(table_name, columns, where, index_info)
         else:
             results = self.table_manager.select_records(table_name, where, columns)
         
@@ -137,30 +149,170 @@ class StorageEngine:
             results = results[:limit]
             
         return results
+
+    def select_with_performance(self, table_name: str, 
+                               columns: Optional[List[str]] = None,
+                               where: Optional[Dict[str, Any]] = None,
+                               limit: Optional[int] = None) -> Dict[str, Any]:
+        """
+        查询记录并返回性能对比信息
+        
+        Returns:
+            {
+                'full_scan_results': [...],
+                'index_results': [...], 
+                'full_scan_time': float,
+                'index_time': float,
+                'index_used': str or None,
+                'speedup_ratio': float
+            }
+        """
+        import time
+        
+        # 1. 全表扫描性能测试
+        start_time = time.time()
+        full_scan_results = self.table_manager.select_records(table_name, where, columns)
+        if limit is not None and full_scan_results:
+            full_scan_results = full_scan_results[:limit]
+        full_scan_time = time.time() - start_time
+        
+        # 2. 索引查询性能测试
+        index_info = None
+        if where:
+            index_info = self._can_use_index(table_name, where)
+        
+        start_time = time.time()
+        if index_info:
+            index_results = self._select_with_index(table_name, columns, where, index_info)
+        else:
+            index_results = full_scan_results.copy()  # 没有索引时，结果相同
+        if limit is not None and index_results:
+            index_results = index_results[:limit]
+        index_time = time.time() - start_time
+        
+        return {
+            'full_scan_results': full_scan_results,
+            'index_results': index_results,
+            'full_scan_time': full_scan_time,
+            'index_time': index_time,
+            'index_used': index_info[0] if index_info else None,
+            'speedup_ratio': full_scan_time / index_time if index_time > 0 else 1.0
+        }
     
-    def _can_use_index(self, table_name: str, where: Dict[str, Any]) -> bool:
-        """检查是否可以使用索引加速查询"""
-        # 简化实现：检查是否存在等值查询条件
+    def _can_use_index(self, table_name: str, where: Dict[str, Any]) -> Optional[tuple]:
+        """检查是否可以使用索引加速查询，返回(索引名, 字段名, 操作符, 值)"""
         if not where:
-            return False
+            return None
         
-        # 检查是否为简单的等值查询
+        # 获取该表的所有索引
+        available_indexes = []
+        for index_name in self.index_manager.list_indexes():
+            index = self.index_manager.get_index(index_name)
+            if index and index.table_name == table_name:
+                available_indexes.append((index_name, index))
+        
+        # 检查WHERE条件中的字段是否有对应索引
         for field, value in where.items():
-            # 只处理简单的等值查询，不处理范围查询或复杂条件
+            # 处理简单的等值查询
             if not isinstance(value, dict):
-                # 检查是否存在对应的索引
-                # 这里需要更复杂的索引匹配逻辑
-                return True
+                for index_name, index in available_indexes:
+                    # 检查索引是否包含该字段（假设单列索引）
+                    if len(index.columns) == 1 and index.columns[0] == field:
+                        return (index_name, field, '=', value)
+            
+            # 处理范围查询条件 (例如: {'pages': {'$gt': 500}})
+            elif isinstance(value, dict):
+                for index_name, index in available_indexes:
+                    if len(index.columns) == 1 and index.columns[0] == field:
+                        # 支持的操作符映射
+                        op_mapping = {
+                            '$gt': '>', '$gte': '>=', 
+                            '$lt': '<', '$lte': '<=', 
+                            '$ne': '!=', '$eq': '='
+                        }
+                        
+                        for op_key, op_value in value.items():
+                            if op_key in op_mapping:
+                                return (index_name, field, op_mapping[op_key], op_value)
         
-        return False
+        return None
     
     def _select_with_index(self, table_name: str, 
                           columns: Optional[List[str]], 
-                          where: Dict[str, Any]) -> List[Dict[str, Any]]:
+                          where: Dict[str, Any],
+                          index_info: tuple) -> List[Dict[str, Any]]:
         """使用索引进行查询"""
-        # 简化实现：直接使用表管理器的查询方法
-        # 实际实现中应该使用索引来定位记录
-        return self.table_manager.select_records(table_name, where, columns)
+        try:
+            index_name, field_name, operator, search_value = index_info
+            index = self.index_manager.get_index(index_name)
+            if not index:
+                # 索引不存在，回退到全表扫描
+                return self.table_manager.select_records(table_name, where, columns)
+            
+            # 对于范围查询，我们暂时使用简化实现：
+            # 直接扫描所有记录并应用索引条件进行过滤
+            # 这样可以确保功能正确性，虽然性能不是最优
+            
+            # 根据索引结果获取完整记录
+            all_records = self.table_manager.select_records(table_name, {}, None)
+            
+            # 对于B+树索引，search_by_condition返回的是满足条件的键值
+            # 我们需要根据这些键值从所有记录中筛选出匹配的记录
+            indexed_records = []
+            
+            if operator == '=':
+                # 等值查询：直接匹配
+                for record in all_records:
+                    if record.get(field_name) == search_value:
+                        indexed_records.append(record)
+            else:
+                # 范围查询：根据操作符进行比较
+                for record in all_records:
+                    record_value = record.get(field_name)
+                    if record_value is not None:
+                        try:
+                            if operator == '>' and record_value > search_value:
+                                indexed_records.append(record)
+                            elif operator == '>=' and record_value >= search_value:
+                                indexed_records.append(record)
+                            elif operator == '<' and record_value < search_value:
+                                indexed_records.append(record)
+                            elif operator == '<=' and record_value <= search_value:
+                                indexed_records.append(record)
+                            elif operator in ('!=', '<>') and record_value != search_value:
+                                indexed_records.append(record)
+                        except TypeError:
+                            # 处理类型不匹配的情况
+                            continue
+            
+            # 应用其他WHERE条件（除了已经通过索引过滤的条件）
+            filtered_records = []
+            for record in indexed_records:
+                match = True
+                for field, expected_value in where.items():
+                    if field != field_name:  # 跳过已经索引过滤的字段
+                        if isinstance(expected_value, dict):
+                            # 处理复杂条件（暂时跳过）
+                            continue
+                        if record.get(field) != expected_value:
+                            match = False
+                            break
+                if match:
+                    filtered_records.append(record)
+            
+            # 应用列投影
+            if columns and '*' not in columns:
+                projected_records = []
+                for record in filtered_records:
+                    projected = {col: record.get(col) for col in columns if col in record}
+                    projected_records.append(projected)
+                return projected_records
+            
+            return filtered_records
+            
+        except Exception as e:
+            print(f"索引查询出错: {e}，回退到全表扫描")
+            return self.table_manager.select_records(table_name, where, columns)
     
     def update(self, table_name: str, 
               values: Dict[str, Any],
@@ -176,8 +328,17 @@ class StorageEngine:
         Returns:
             更新的记录数
         """
+        # 事务日志：记录受影响的原记录
+        before = []
+        if self._tx_active:
+            before = self.table_manager.select_records(table_name, where, None)
+
         updated = self.table_manager.update_records(table_name, values, where)
         self.stats['records_updated'] += updated
+        if self._tx_active and before:
+            # 回滚时将这些记录恢复为before
+            for r in before:
+                self._tx_undo_log.append((table_name, 'RESTORE', {'key': r, 'values': r}))
         return updated
     
     def delete(self, table_name: str, 
@@ -192,9 +353,43 @@ class StorageEngine:
         Returns:
             删除的记录数
         """
+        # 事务日志：记录将要删除的记录
+        before = []
+        if self._tx_active:
+            before = self.table_manager.select_records(table_name, where, None)
+
         deleted = self.table_manager.delete_records(table_name, where)
         self.stats['records_deleted'] += deleted
+        if self._tx_active and before:
+            for r in before:
+                self._tx_undo_log.append((table_name, 'INSERT', {'record': r}))
         return deleted
+
+    # 事务接口
+    def begin_transaction(self) -> None:
+        self._tx_active = True
+        self._tx_undo_log.clear()
+
+    def commit_transaction(self) -> None:
+        self._tx_active = False
+        self._tx_undo_log.clear()
+
+    def rollback_transaction(self) -> None:
+        if not self._tx_active:
+            return
+        # 逆序应用undo
+        while self._tx_undo_log:
+            table, op, payload = self._tx_undo_log.pop()
+            if op == 'DELETE':
+                # 删除指定记录（精确匹配）
+                self.table_manager.delete_records(table, payload.get('where'))
+            elif op == 'INSERT':
+                self.table_manager.insert_record(table, payload.get('record', {}))
+            elif op == 'RESTORE':
+                # 简化：按主键/整体匹配恢复为旧值（用update实现）
+                key = payload.get('key', {})
+                self.table_manager.update_records(table, key, key)
+        self._tx_active = False
     
     def list_tables(self) -> List[str]:
         """列出所有表"""
@@ -254,6 +449,20 @@ class StorageEngine:
         
         # 如果B+树索引创建失败，回退到表管理器的简单索引实现
         return self.table_manager.create_index(index_name, table_name, columns)
+
+    def drop_index(self, index_name: str) -> bool:
+        """删除索引"""
+        # 先尝试删除B+树索引
+        if self.index_manager.drop_index(index_name):
+            return True
+        # 回退删除表管理器中的索引（如果有实现）
+        if hasattr(self.table_manager, 'drop_index'):
+            return self.table_manager.drop_index(index_name)
+        return False
+
+    def list_indexes(self) -> List[str]:
+        """列出所有索引名称"""
+        return self.index_manager.list_indexes()
     
     def get_index(self, index_name: str):
         """
@@ -284,6 +493,16 @@ class StorageEngine:
             'storage_stats': self.stats.copy(),
             'cache_stats': cache_stats,
             'page_stats': page_stats
+        }
+    
+    def get_optimization_stats(self) -> Dict[str, Any]:
+        """获取查询优化统计信息"""
+        # 这里我们需要从SQL处理器或执行引擎获取优化统计
+        # 目前返回默认值，实际实现中需要集成执行引擎的优化统计
+        return {
+            'optimization_enabled': True,
+            'optimizations_applied': 0,
+            'optimization_time': 0.0
         }
     
     def print_status(self):

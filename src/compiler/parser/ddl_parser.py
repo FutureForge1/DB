@@ -70,6 +70,14 @@ class DDLParser:
             return self._parse_drop_statement()
         elif self.current_token_type() == TokenType.ALTER:
             return self._parse_alter_statement()
+        elif self.current_token_type() == TokenType.SHOW:
+            return self._parse_show_statement()
+        elif self.current_token_type() == TokenType.BEGIN:
+            return self._parse_begin()
+        elif self.current_token_type() == TokenType.COMMIT:
+            return self._parse_commit()
+        elif self.current_token_type() == TokenType.ROLLBACK:
+            return self._parse_rollback()
         else:
             raise SyntaxError(
                 f"Unexpected DDL statement starting with {self.current_token_type().value}",
@@ -318,6 +326,8 @@ class DDLParser:
         
         if self.current_token_type() == TokenType.TABLE:
             return self._parse_drop_table()
+        elif self.current_token_type() == TokenType.INDEX:
+            return self._parse_drop_index()
         else:
             raise SyntaxError(
                 f"Unsupported DROP statement: {self.current_token_type().value}",
@@ -348,6 +358,71 @@ class DDLParser:
         drop_table_node.add_child(table_name_node)
         
         return drop_table_node
+    
+    def _parse_drop_index(self) -> ASTNode:
+        """
+        解析DROP INDEX语句
+        语法: DROP INDEX index_name;
+               或 DROP INDEX index_name ON table_name;
+        """
+        # INDEX
+        self.expect(TokenType.INDEX)
+        
+        # 索引名
+        index_name_token = self.expect(TokenType.IDENTIFIER)
+        
+        # 可选的 ON table_name
+        table_name = None
+        if self.current_token_type() == TokenType.ON:
+            self.expect(TokenType.ON)
+            table_name_token = self.expect(TokenType.IDENTIFIER)
+            table_name = table_name_token.value
+        
+        # 分号
+        self.expect(TokenType.SEMICOLON)
+        
+        # 创建DROP INDEX节点
+        drop_index_node = ASTNode(ASTNodeType.SELECT_STMT)
+        drop_index_node.value = f"DROP_INDEX"
+        
+        # 索引名节点
+        index_name_node = ASTNode(ASTNodeType.TABLE_NAME, index_name_token.value)
+        drop_index_node.add_child(index_name_node)
+        
+        # 如果有表名，添加表名节点
+        if table_name:
+            table_name_node = ASTNode(ASTNodeType.TABLE_NAME, table_name)
+            drop_index_node.add_child(table_name_node)
+        
+        return drop_index_node
+
+    def _parse_begin(self) -> ASTNode:
+        """
+        解析BEGIN [TRANSACTION];
+        """
+        self.expect(TokenType.BEGIN)
+        if self.current_token_type() == TokenType.TRANSACTION:
+            self.advance()
+        self.expect(TokenType.SEMICOLON)
+        node = ASTNode(ASTNodeType.SELECT_STMT)
+        node.value = "BEGIN"
+        return node
+
+    def _parse_commit(self) -> ASTNode:
+        """解析COMMIT;"""
+        self.expect(TokenType.COMMIT)
+        self.expect(TokenType.SEMICOLON)
+        node = ASTNode(ASTNodeType.SELECT_STMT)
+        node.value = "COMMIT"
+        return node
+
+    def _parse_rollback(self) -> ASTNode:
+        """解析ROLLBACK;"""
+        self.expect(TokenType.ROLLBACK)
+        self.expect(TokenType.SEMICOLON)
+        node = ASTNode(ASTNodeType.SELECT_STMT)
+        node.value = "ROLLBACK"
+        return node
     
     def _parse_alter_statement(self) -> ASTNode:
         """解析ALTER语句"""
@@ -409,66 +484,44 @@ class DDLParser:
         alter_table_node.add_child(column_def)
         
         return alter_table_node
-
-
-def test_ddl_parser():
-    """测试DDL语法分析器"""
-    from src.compiler.lexer.lexer import Lexer
     
-    print("=" * 80)
-    print("              DDL语法分析器测试")
-    print("=" * 80)
-    
-    test_cases = [
-        # CREATE TABLE
-        """CREATE TABLE products (
-            product_id INT PRIMARY KEY,
-            product_name VARCHAR(255) NOT NULL,
-            price DECIMAL(10, 2),
-            category_id INT
-        );""",
+    def _parse_show_statement(self) -> ASTNode:
+        """
+        解析SHOW语句
+        语法: SHOW INDEX FROM table_name;
+               或 SHOW INDEXES FROM table_name;
+        """
+        # SHOW
+        self.expect(TokenType.SHOW)
         
-        # CREATE INDEX
-        "CREATE INDEX idx_product_name ON products (product_name);",
+        if self.current_token_type() == TokenType.INDEX:
+            self.expect(TokenType.INDEX)
+            index_type = "INDEX"
+        elif self.current_token and self.current_token.value.upper() == "INDEXES":
+            self.advance()  # 跳过INDEXES
+            index_type = "INDEXES"
+        else:
+            raise SyntaxError(
+                f"Unsupported SHOW statement: expected INDEX or INDEXES, got {self.current_token.value if self.current_token else 'EOF'}",
+                self.current_token.line if self.current_token else 0,
+                self.current_token.column if self.current_token else 0
+            )
         
-        # DROP TABLE
-        "DROP TABLE products;",
+        # FROM
+        self.expect(TokenType.FROM)
         
-        # ALTER TABLE
-        "ALTER TABLE products ADD COLUMN description TEXT;"
-    ]
-    
-    for i, sql in enumerate(test_cases, 1):
-        print(f"\n测试用例 {i}: {sql}")
-        print("-" * 60)
+        # 表名
+        table_name_token = self.expect(TokenType.IDENTIFIER)
         
-        try:
-            lexer = Lexer(sql)
-            tokens = lexer.tokenize()
-            
-            parser = DDLParser(tokens)
-            ast = parser.parse()
-            
-            if ast:
-                print("✅ DDL语法分析成功")
-                print(f"AST根节点: {ast.type.value}")
-                print(f"操作类型: {ast.value}")
-                print(f"子节点数: {len(ast.children)}")
-                
-                # 显示AST结构
-                def print_ast(node, indent=0):
-                    prefix = "  " * indent
-                    print(f"{prefix}+ {node.type.value}: {node.value or ''}")
-                    for child in node.children:
-                        print_ast(child, indent + 1)
-                
-                print_ast(ast)
-            else:
-                print("❌ DDL语法分析失败")
-                
-        except Exception as e:
-            print(f"❌ 解析失败: {e}")
-
-
-if __name__ == "__main__":
-    test_ddl_parser()
+        # 分号
+        self.expect(TokenType.SEMICOLON)
+        
+        # 创建SHOW INDEX节点
+        show_index_node = ASTNode(ASTNodeType.SELECT_STMT)
+        show_index_node.value = f"SHOW_INDEX"
+        
+        # 表名节点
+        table_name_node = ASTNode(ASTNodeType.TABLE_NAME, table_name_token.value)
+        show_index_node.add_child(table_name_node)
+        
+        return show_index_node

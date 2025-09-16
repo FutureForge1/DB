@@ -45,6 +45,16 @@ class DDLDMLSemanticAnalyzer:
                 self._analyze_alter_table(ast)
             elif ast.value == "CREATE_INDEX":
                 self._analyze_create_index(ast)
+            elif ast.value == "DROP_INDEX":
+                self._analyze_drop_index(ast)
+            elif ast.value == "SHOW_INDEX":
+                self._analyze_show_index(ast)
+            elif ast.value == "BEGIN":
+                self.quadruples.append(Quadruple(op="BEGIN", arg1=None, arg2=None, result=self._next_temp()))
+            elif ast.value == "COMMIT":
+                self.quadruples.append(Quadruple(op="COMMIT", arg1=None, arg2=None, result=self._next_temp()))
+            elif ast.value == "ROLLBACK":
+                self.quadruples.append(Quadruple(op="ROLLBACK", arg1=None, arg2=None, result=self._next_temp()))
             elif ast.value == "INSERT":
                 self._analyze_insert(ast)
             elif ast.value == "UPDATE":
@@ -52,7 +62,11 @@ class DDLDMLSemanticAnalyzer:
             elif ast.value == "DELETE":
                 self._analyze_delete(ast)
             else:
-                raise SemanticError(f"Unsupported operation: {ast.value}")
+                raise SemanticError(
+                    "操作错误",
+                    f"不支持的操作: {ast.value}",
+                    context="DDL/DML分析"
+                )
                 
         except Exception as e:
             self.errors.append(str(e))
@@ -164,6 +178,37 @@ class DDLDMLSemanticAnalyzer:
         )
         self.quadruples.append(quad)
     
+    def _analyze_drop_index(self, ast: ASTNode):
+        """分析DROP INDEX语句"""
+        index_name = ast.children[0].value  # 索引名
+        
+        # 如果有表名信息
+        table_name = None
+        if len(ast.children) > 1:
+            table_name = ast.children[1].value
+        
+        temp_result = self._next_temp()
+        quad = Quadruple(
+            op="DROP_INDEX",
+            arg1=index_name,
+            arg2=table_name if table_name else "-",
+            result=temp_result
+        )
+        self.quadruples.append(quad)
+    
+    def _analyze_show_index(self, ast: ASTNode):
+        """分析SHOW INDEX语句"""
+        table_name = ast.children[0].value  # 表名
+        
+        temp_result = self._next_temp()
+        quad = Quadruple(
+            op="SHOW_INDEX",
+            arg1=table_name,
+            arg2="-",
+            result=temp_result
+        )
+        self.quadruples.append(quad)
+    
     def _analyze_insert(self, ast: ASTNode):
         """分析INSERT语句"""
         table_name = ast.children[0].value  # TABLE_NAME节点
@@ -179,7 +224,11 @@ class DDLDMLSemanticAnalyzer:
                 values_list = child
         
         if not values_list:
-            raise SemanticError("Missing VALUES clause in INSERT statement")
+            raise SemanticError(
+                "语法错误",
+                "INSERT语句缺少VALUES子句",
+                context="INSERT语句分析"
+            )
         
         # 处理每一行值
         for row_node in values_list.children:
@@ -210,7 +259,11 @@ class DDLDMLSemanticAnalyzer:
                 where_clause = child
         
         if not set_clause:
-            raise SemanticError("Missing SET clause in UPDATE statement")
+            raise SemanticError(
+                "语法错误",
+                "UPDATE语句缺少SET子句",
+                context="UPDATE语句分析"
+            )
         
         # 处理SET赋值
         assignments = []

@@ -177,11 +177,11 @@ class EnhancedSemanticAnalyzer:
             if result:
                 self.code_gen.emit("OUTPUT", result, None, "RESULT")
             
-            print("✅ 增强语义分析完成!")
+            print("增强语义分析完成!")
             return True
             
         except Exception as e:
-            print(f"❌ 增强语义分析失败: {e}")
+            print(f"增强语义分析失败: {e}")
             return False
     
     def _analyze_node_enhanced(self, node: ASTNode) -> Optional[str]:

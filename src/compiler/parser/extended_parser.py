@@ -96,8 +96,10 @@ class ExtendedParser:
                         self.parse_stack.pop()
                     else:
                         # 匹配失败
+                        expected_desc = self._get_token_description(stack_top)
+                        found_desc = self._get_token_description(current_input)
                         raise SyntaxError(
-                            f"Expected '{stack_top}', found '{current_input}'",
+                            f"语法错误：期望 {expected_desc}，但发现 {found_desc}",
                             self.current_token.line if self.current_token else 0,
                             self.current_token.column if self.current_token else 0
                         )
@@ -110,8 +112,10 @@ class ExtendedParser:
                         production = self._get_default_production(stack_top, current_input)
                         
                         if production is None:
+                            expected_tokens = self._get_expected_tokens(stack_top)
+                            found_desc = self._get_token_description(current_input)
                             raise SyntaxError(
-                                f"No production for {stack_top} with input {current_input}",
+                                f"语法错误：{stack_top} 不能接受 {found_desc}，期望的输入：{expected_tokens}",
                                 self.current_token.line if self.current_token else 0,
                                 self.current_token.column if self.current_token else 0
                             )
@@ -152,7 +156,7 @@ class ExtendedParser:
                 self.ast_root = self._build_extended_ast()
                 return self.ast_root
             else:
-                raise SyntaxError("Unexpected end of input or stack not empty")
+                raise SyntaxError("不期待的输入或者栈非空")
                 
         except SyntaxError as e:
             print("-" * 80)
@@ -523,17 +527,6 @@ class ExtendedParser:
                     pos += 1
             
             root.add_child(group_node)
-            
-            # 处理HAVING子句
-            if pos < len(self.tokens) and self.tokens[pos].type == TokenType.HAVING:
-                pos += 1
-                having_node = ASTNode(ASTNodeType.HAVING_CLAUSE)
-                root.add_child(having_node)
-                
-                # 跳过HAVING条件
-                while (pos < len(self.tokens) and 
-                       self.tokens[pos].type not in [TokenType.ORDER, TokenType.SEMICOLON]):
-                    pos += 1
         
         return pos
     
@@ -552,7 +545,7 @@ class ExtendedParser:
             order_node.add_child(order_list_node)
             
             while (pos < len(self.tokens) and 
-                   self.tokens[pos].type != TokenType.SEMICOLON):
+                   self.tokens[pos].type not in [TokenType.SEMICOLON, TokenType.LIMIT, TokenType.OFFSET]):
                 if self.tokens[pos].type == TokenType.IDENTIFIER:
                     # 检查是否是表别名.列名的形式
                     if (pos + 2 < len(self.tokens) and 
@@ -643,7 +636,7 @@ class ExtendedParser:
         return pos
     
     def _parse_limit_clause(self, pos: int, root: ASTNode) -> int:
-        """解析LIMIT/OFFSET子句"""
+        """解析LIMIT/OFFSET子句"""            
         limit_node = ASTNode(ASTNodeType.LIMIT_CLAUSE)
         
         # 解析LIMIT
@@ -698,6 +691,57 @@ class ExtendedParser:
         
         return pos
     
+    def _get_token_description(self, token_value: str) -> str:
+        """获取Token的友好描述"""
+        descriptions = {
+            'SELECT': 'SELECT关键字',
+            'FROM': 'FROM关键字', 
+            'WHERE': 'WHERE关键字',
+            'GROUP': 'GROUP关键字',
+            'BY': 'BY关键字',
+            'HAVING': 'HAVING关键字',
+            'ORDER': 'ORDER关键字',
+            'LIMIT': 'LIMIT关键字',
+            'OFFSET': 'OFFSET关键字',
+            'INNER': 'INNER关键字',
+            'JOIN': 'JOIN关键字',
+            'LEFT': 'LEFT关键字',
+            'RIGHT': 'RIGHT关键字',
+            'IDENTIFIER': '标识符',
+            'NUMBER': '数字',
+            'STRING': '字符串',
+            'COMMA': '逗号(,)',
+            'SEMICOLON': '分号(;)',
+            'LEFT_PAREN': '左括号((',
+            'RIGHT_PAREN': '右括号())',
+            'ASTERISK': '星号(*)',
+            'DOT': '点号(.)',
+            'EQUAL': '等号(=)',
+            'GREATER_THAN': '大于号(>)',
+            'LESS_THAN': '小于号(<)',
+            '$': '输入结束',
+            'EOF': '文件结束'
+        }
+        return descriptions.get(token_value, f"'{token_value}'")
+    
+    def _get_expected_tokens(self, nonterminal: str) -> str:
+        """获取非终结符期望的Token列表"""
+        # 这里可以通过语法表获取期望的Token
+        expected_map = {
+            'select_list': 'IDENTIFIER, COUNT, SUM, AVG, MAX, MIN, *',
+            'from_clause': 'FROM',
+            'where_clause': 'WHERE 或结束',
+            'group_by_clause': 'GROUP BY 或结束',
+            'having_clause': 'HAVING 或结束',
+            'order_by_clause': 'ORDER BY 或结束',
+            'limit_clause': 'LIMIT 或结束',
+            'table_list': '表名',
+            'column_list': '列名',
+            'condition': '条件表达式',
+            'operand': '操作数'
+        }
+        return expected_map.get(nonterminal, '未知')
+    
     def print_parse_steps(self):
         """打印分析步骤"""
         if not self.parse_steps:
@@ -722,57 +766,3 @@ class ExtendedParser:
         else:
             print("\\n无抽象语法树")
 
-def test_extended_parser():
-    """测试扩展语法分析器"""
-    from src.compiler.lexer.lexer import Lexer
-    
-    test_cases = [
-        # 基本查询
-        "SELECT name FROM students;",
-        
-        # 聚合函数
-        "SELECT COUNT(*), AVG(grade) FROM students;",
-        
-        # JOIN查询
-        "SELECT s.name, c.course_name FROM students s JOIN courses c ON s.id = c.student_id;",
-        
-        # GROUP BY
-        "SELECT major, COUNT(*) FROM students GROUP BY major;",
-        
-        # ORDER BY
-        "SELECT name, grade FROM students ORDER BY grade DESC;",
-        
-        # 复杂查询
-        "SELECT s.name, AVG(g.grade) FROM students s JOIN grades g ON s.id = g.student_id GROUP BY s.name HAVING AVG(g.grade) > 85 ORDER BY AVG(g.grade) DESC;"
-    ]
-    
-    print("=" * 80)
-    print("                    扩展语法分析器测试")
-    print("=" * 80)
-    
-    for i, sql in enumerate(test_cases, 1):
-        print(f"\\n\\n测试用例 {i}: {sql}")
-        print("=" * 80)
-        
-        try:
-            # 词法分析
-            lexer = Lexer(sql)
-            tokens = lexer.tokenize()
-            
-            print("Tokens:", [f"{token.type.value}('{token.value}')" 
-                           for token in tokens if token.type != TokenType.EOF])
-            
-            # 扩展语法分析
-            parser = ExtendedParser(tokens)
-            ast = parser.parse()
-            
-            if ast:
-                parser.print_ast()
-            
-        except Exception as e:
-            print(f"❌ 错误: {e}")
-            import traceback
-            traceback.print_exc()
-
-if __name__ == "__main__":
-    test_extended_parser()

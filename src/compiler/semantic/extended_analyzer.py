@@ -73,16 +73,20 @@ class ExtendedSemanticAnalyzer:
             if ast.type == ASTNodeType.SELECT_STMT:
                 self._analyze_select_statement(ast)
             else:
-                raise SemanticError(f"Unsupported statement type: {ast.type}")
+                raise SemanticError(
+                    "类型错误", 
+                    f"不支持的语句类型: {ast.type}",
+                    context="语义分析入口"
+                )
             
-            print(f"\\n✅ 生成 {len(self.quadruples)} 个四元式")
+            print(f"\\n成功生成 {len(self.quadruples)} 个四元式")
             for i, quad in enumerate(self.quadruples, 1):
                 print(f"  {i}: {quad}")
             
             return self.quadruples
             
         except Exception as e:
-            print(f"❌ 语义错误: {e}")
+            print(f"语义错误: {e}")
             return []
     
     def _analyze_select_statement(self, node: ASTNode):
@@ -194,7 +198,11 @@ class ExtendedSemanticAnalyzer:
                     try:
                         tables = self.storage_engine.list_tables()
                         if table_name not in tables:
-                            raise SemanticError(f"Table '{table_name}' does not exist")
+                            raise SemanticError(
+                                "表不存在错误", 
+                                f"表 '{table_name}' 不存在",
+                                context=f"FROM子句验证"
+                            )
                     except Exception as e:
                         # 如果无法访问存储引擎，忽略验证
                         pass
@@ -736,29 +744,30 @@ class ExtendedSemanticAnalyzer:
                 self._analyze_order_list(child, order_specs)
 
     def _analyze_limit_clause(self, node: ASTNode):
-        """分析LIMIT/OFFSET子句"""
-        for child in node.children:
-            if child.type == ASTNodeType.LIMIT_CLAUSE:
-                print("  分析LIMIT/OFFSET子句...")
-                
-                limit_value = None
-                offset_value = None
-                
-                # 查找LIMIT和OFFSET值
-                for grandchild in child.children:
-                    if grandchild.type == ASTNodeType.LIMIT_VALUE:
-                        limit_value = grandchild.value
-                    elif grandchild.type == ASTNodeType.OFFSET_VALUE:
-                        offset_value = grandchild.value
-                
-                # 生成LIMIT/OFFSET四元式
-                if limit_value is not None:
-                    self._emit('LIMIT', limit_value, None, None)
-                    print(f"    LIMIT: {limit_value}")
-                
-                if offset_value is not None:
-                    self._emit('OFFSET', offset_value, None, None)
-                    print(f"    OFFSET: {offset_value}")
+        """分析LIMIT/OFFSET子句"""        
+        if hasattr(node, 'children'):
+            for child in node.children:
+                if child.type == ASTNodeType.LIMIT_CLAUSE:
+                    print("  分析LIMIT/OFFSET子句...")
+                    
+                    limit_value = None
+                    offset_value = None
+                    
+                    # 查找LIMIT和OFFSET值
+                    for grandchild in child.children:
+                        if grandchild.type == ASTNodeType.LIMIT_VALUE:
+                            limit_value = grandchild.value
+                        elif grandchild.type == ASTNodeType.OFFSET_VALUE:
+                            offset_value = grandchild.value
+                    
+                    # 生成LIMIT/OFFSET四元式
+                    if limit_value is not None:
+                        self._emit('LIMIT', limit_value, None, None)
+                        print(f"    LIMIT: {limit_value}")
+                    
+                    if offset_value is not None:
+                        self._emit('OFFSET', offset_value, None, None)
+                        print(f"    OFFSET: {offset_value}")
 
     def _generate_label(self) -> str:
         """生成标签"""

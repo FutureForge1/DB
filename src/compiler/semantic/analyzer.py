@@ -133,7 +133,11 @@ class SemanticAnalyzer:
         elif node.type == ASTNodeType.LITERAL:
             return self._analyze_literal(node)
         else:
-            raise SemanticError(f"Unknown AST node type: {node.type}")
+            raise SemanticError(
+                "类型错误",
+                f"未知的AST节点类型: {node.type}",
+                context="AST节点分析"
+            )
     
     def _analyze_select_statement(self, node: ASTNode) -> str:
         """分析SELECT语句"""
@@ -216,7 +220,11 @@ class SemanticAnalyzer:
             table_exists = table_name in self.table_schemas
         
         if not table_exists:
-            raise SemanticError(f"Table '{table_name}' does not exist")
+            raise SemanticError(
+                "表不存在错误",
+                f"表 '{table_name}' 不存在",
+                context="表名验证"
+            )
         
         # 添加到符号表
         self.add_symbol(table_name, "table")

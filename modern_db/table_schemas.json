@@ -26,76 +26,6 @@
       "created_time": "2025-09-15 00:22:50"
     },
     {
-      "table_name": "employees",
-      "columns": [
-        {
-          "name": "emp_id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": true,
-          "is_unique": false
-        },
-        {
-          "name": "first_name",
-          "column_type": "STRING",
-          "max_length": 50,
-          "nullable": false,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "last_name",
-          "column_type": "STRING",
-          "max_length": 50,
-          "nullable": false,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "email",
-          "column_type": "STRING",
-          "max_length": 100,
-          "nullable": false,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "hire_date",
-          "column_type": "DATE",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "salary",
-          "column_type": "FLOAT",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        },
-        {
-          "name": "department_id",
-          "column_type": "INTEGER",
-          "max_length": null,
-          "nullable": true,
-          "default_value": null,
-          "is_primary_key": false,
-          "is_unique": false
-        }
-      ],
-      "primary_key": "emp_id",
-      "created_time": "2025-09-15 00:23:54"
-    },
-    {
       "table_name": "authors",
       "columns": [
         {
@@ -275,14 +205,63 @@
       ],
       "primary_key": "product_id",
       "created_time": "2025-09-15 11:17:56"
+    },
+    {
+      "table_name": "employees",
+      "columns": [
+        {
+          "name": "id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "name",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "dept",
+          "column_type": "STRING",
+          "max_length": 20,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "salary",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "age",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": null,
+      "created_time": "2025-09-15 17:14:08"
     }
   ],
   "table_pages": {
     "departments": [
       2
-    ],
-    "employees": [
-      3
     ],
     "authors": [
       4,
@@ -313,6 +292,9 @@
     ],
     "products": [
       22
+    ],
+    "employees": [
+      58
     ]
   }
 }

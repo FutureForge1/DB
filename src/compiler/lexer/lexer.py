@@ -116,8 +116,10 @@ class Lexer:
                 continue
             
             # 未知字符
+            char = self.current_char()
+            ascii_code = ord(char) if char else -1
             raise LexicalError(
-                f"错误字符: '{self.current_char()}'",
+                f"非法字符 '{char}' (ASCII: {ascii_code})",
                 self.line, self.column
             )
         
@@ -201,7 +203,7 @@ class Lexer:
         
         if self.position >= len(self.source):
             raise LexicalError(
-                "字符串没有正确结束",
+                f"字符串没有正确结束，缺少结束引号 '{quote_char}'",
                 start_line, start_column
             )
          # 跳过结束的单引号

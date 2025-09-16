@@ -57,6 +57,7 @@ class TokenType(Enum):
     DROP = "DROP"
     ALTER = "ALTER"
     INDEX = "INDEX"
+    SHOW = "SHOW"
     
     # DML的
     INSERT = "INSERT"
@@ -96,6 +97,12 @@ class TokenType(Enum):
     UNION = "UNION"
     INTERSECT = "INTERSECT"
     EXCEPT = "EXCEPT"
+    
+    # 事务控制
+    BEGIN = "BEGIN"
+    COMMIT = "COMMIT"
+    ROLLBACK = "ROLLBACK"
+    TRANSACTION = "TRANSACTION"
     
     # 标识符和字面值
     IDENTIFIER = "IDENTIFIER"  # 表名、列名等
@@ -286,7 +293,21 @@ class SyntaxError(CompilerError):
 
 class SemanticError(CompilerError):
     """语义分析错误"""
-    pass
+    def __init__(self, error_type: str, message: str, line: int = 0, column: int = 0, context: str = ""):
+        self.error_type = error_type
+        self.context = context
+        super().__init__(message, line, column)
+    
+    def format_message(self):
+        parts = [f"[{self.error_type}]"]
+        if self.line > 0:
+            parts.append(f"行 {self.line}")
+            if self.column > 0:
+                parts.append(f"列 {self.column}")
+        parts.append(f": {self.message}")
+        if self.context:
+            parts.append(f" (上下文: {self.context})")
+        return " ".join(parts)
 
 
 
@@ -307,7 +328,9 @@ SQL_KEYWORDS = {
     # 子查询关键字
     'IN', 'EXISTS', 'ALL', 'ANY', 'SOME',
     # DDL关键字
-    'CREATE', 'TABLE', 'DROP', 'ALTER', 'INDEX',
+    'CREATE', 'TABLE', 'DROP', 'ALTER', 'INDEX', 'SHOW',
+    # 事务关键字
+    'BEGIN', 'COMMIT', 'ROLLBACK', 'TRANSACTION',
     # DML关键字
     'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE',
     # 数据类型关键字

@@ -168,6 +168,7 @@ class ExtendedSQLGrammar:
             
             "simple_condition": [
                 ["column_ref", "comparison_op", "operand"],
+                ["aggregate_function", "comparison_op", "operand"],
                 ["column_ref", "IN", "(", "value_list", ")"],
                 ["EXISTS", "(", "subquery", ")"]
             ],
@@ -416,9 +417,13 @@ class ExtendedSQLGrammar:
         
         # condition
         self.parsing_table[("condition", "IDENTIFIER")] = ["or_condition"]
+        for agg_func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
+            self.parsing_table[("condition", agg_func)] = ["or_condition"]
         
         # or_condition
         self.parsing_table[("or_condition", "IDENTIFIER")] = ["and_condition", "or_condition_tail"]
+        for agg_func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
+            self.parsing_table[("or_condition", agg_func)] = ["and_condition", "or_condition_tail"]
         
         # or_condition_tail
         self.parsing_table[("or_condition_tail", "OR")] = ["OR", "and_condition", "or_condition_tail"]
@@ -427,6 +432,8 @@ class ExtendedSQLGrammar:
         
         # and_condition
         self.parsing_table[("and_condition", "IDENTIFIER")] = ["simple_condition", "and_condition_tail"]
+        for agg_func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
+            self.parsing_table[("and_condition", agg_func)] = ["simple_condition", "and_condition_tail"]
         
         # and_condition_tail
         self.parsing_table[("and_condition_tail", "AND")] = ["AND", "simple_condition", "and_condition_tail"]
@@ -435,6 +442,8 @@ class ExtendedSQLGrammar:
         
         # simple_condition
         self.parsing_table[("simple_condition", "IDENTIFIER")] = ["column_ref", "comparison_op", "operand"]
+        for agg_func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
+            self.parsing_table[("simple_condition", agg_func)] = ["aggregate_function", "comparison_op", "operand"]
         
         # operand
         self.parsing_table[("operand", "IDENTIFIER")] = ["column_ref"]
@@ -631,9 +640,13 @@ class ExtendedSQLGrammar:
         
         # condition
         self.parsing_table[("condition", "IDENTIFIER")] = ["or_condition"]
+        for agg_func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
+            self.parsing_table[("condition", agg_func)] = ["or_condition"]
         
         # or_condition
         self.parsing_table[("or_condition", "IDENTIFIER")] = ["and_condition", "or_condition_tail"]
+        for agg_func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
+            self.parsing_table[("or_condition", agg_func)] = ["and_condition", "or_condition_tail"]
         
         # or_condition_tail
         self.parsing_table[("or_condition_tail", "OR")] = ["OR", "and_condition", "or_condition_tail"]
@@ -642,6 +655,8 @@ class ExtendedSQLGrammar:
         
         # and_condition
         self.parsing_table[("and_condition", "IDENTIFIER")] = ["simple_condition", "and_condition_tail"]
+        for agg_func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
+            self.parsing_table[("and_condition", agg_func)] = ["simple_condition", "and_condition_tail"]
         
         # and_condition_tail
         self.parsing_table[("and_condition_tail", "AND")] = ["AND", "simple_condition", "and_condition_tail"]
@@ -650,6 +665,8 @@ class ExtendedSQLGrammar:
         
         # simple_condition
         self.parsing_table[("simple_condition", "IDENTIFIER")] = ["column_ref", "comparison_op", "operand"]
+        for agg_func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]:
+            self.parsing_table[("simple_condition", agg_func)] = ["aggregate_function", "comparison_op", "operand"]
         
         # operand
         self.parsing_table[("operand", "IDENTIFIER")] = ["column_ref"]
@@ -731,42 +748,3 @@ class ExtendedSQLGrammar:
         """判断符号是否为非终结符"""
         return symbol in self.nonterminals
 
-def test_extended_grammar():
-    """测试扩展语法规则"""
-    print("=" * 60)
-    print("           扩展SQL语法规则测试")
-    print("=" * 60)
-    
-    grammar = ExtendedSQLGrammar()
-    
-    print(f"开始符号: {grammar.start_symbol}")
-    print(f"非终结符数量: {len(grammar.nonterminals)}")
-    print(f"终结符数量: {len(grammar.terminals)}")
-    print(f"产生式数量: {sum(len(prods) for prods in grammar.productions.values())}")
-    
-    # 测试一些预测分析表项
-    test_cases = [
-        ("sql_statement", "SELECT"),
-        ("select_list", "DISTINCT"),
-        ("column_spec", "*"),
-        ("where_clause", "WHERE"),
-        ("group_by_clause", "GROUP"),
-        ("order_by_clause", "ORDER"),
-        ("from_clause", "FROM"),
-        ("column_ref", "IDENTIFIER")
-    ]
-    
-    print("\\n预测分析表测试:")
-    print("-" * 40)
-    
-    for nonterminal, terminal in test_cases:
-        production = grammar.get_production(nonterminal, terminal)
-        if production:
-            print(f"{nonterminal} + {terminal:<10} -> {' '.join(production)}")
-        else:
-            print(f"{nonterminal} + {terminal:<10} -> 无产生式")
-    
-    print("\\n✅ 扩展语法规则创建完成!")
-
-if __name__ == "__main__":
-    test_extended_grammar()
