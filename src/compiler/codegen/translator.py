@@ -176,10 +176,22 @@ class QuadrupleTranslator:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
         
-        # 生成其他操作指令
-        for quad in filter_quads + output_quads + other_quads:
+        # 生成其他操作指令（但跳过OUTPUT，它需要最后处理）
+        for quad in filter_quads + other_quads:
             print(f"翻译四元式: {quad}")
             self._translate_quadruple(quad)
+        
+        # 生成OUTPUT指令（最后处理，确保使用正确的寄存器）
+        for quad in output_quads:
+            print(f"翻译四元式: {quad}")
+            # 如果有HAVING，OUTPUT应该使用HAVING的结果寄存器
+            if having_quads:
+                # 使用最后一个HAVING的结果寄存器
+                having_result_reg = self.get_or_create_register(having_quads[-1].result)
+                self.target_gen.emit_output(having_result_reg)
+                print(f"  → OUTPUT {having_result_reg} (HAVING结果)")
+            else:
+                self._translate_quadruple(quad)
         
         # 生成END指令
         for quad in end_quads:

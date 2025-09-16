@@ -581,8 +581,17 @@ class ExecutionEngine:
         """执行OUTPUT指令 - 输出结果"""
         source_reg = instruction.operands[0] if instruction.operands else None
     
-        # 确定要输出的记录
-        records_to_output = self.context.filtered_records or self.context.current_records
+        # 优先使用指定寄存器中的数据
+        if source_reg and source_reg in self.context.registers:
+            reg_value = self.context.registers[source_reg]
+            if isinstance(reg_value, list):
+                records_to_output = reg_value
+            else:
+                # 单个值，包装成记录
+                records_to_output = [{'result': reg_value}]
+        else:
+            # 回退到上下文记录
+            records_to_output = self.context.filtered_records or self.context.current_records
     
         print(f"  → OUTPUT {source_reg}")
         print(f"    当前记录数: {len(records_to_output)}")

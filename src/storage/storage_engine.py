@@ -342,7 +342,8 @@ class StorageEngine:
         if self._tx_active and before:
             # 回滚时将这些记录恢复为before
             for r in before:
-                self._tx_undo_log.append((table_name, 'RESTORE', {'key': r, 'values': r}))
+                # 记录原始数据，用于回滚时恢复
+                self._tx_undo_log.append((table_name, 'RESTORE', {'original': r, 'where': where}))
         return updated
     
     def delete(self, table_name: str, 
@@ -390,9 +391,13 @@ class StorageEngine:
             elif op == 'INSERT':
                 self.table_manager.insert_record(table, payload.get('record', {}))
             elif op == 'RESTORE':
-                # 简化：按主键/整体匹配恢复为旧值（用update实现）
-                key = payload.get('key', {})
-                self.table_manager.update_records(table, key, key)
+                # 恢复原始数据
+                original_data = payload.get('original', {})
+                where_condition = payload.get('where', {})
+                if original_data:
+                    # 先删除当前记录，然后插入原始记录
+                    self.table_manager.delete_records(table, where_condition)
+                    self.table_manager.insert_record(table, original_data)
         self._tx_active = False
     
     def list_tables(self) -> List[str]:

@@ -19,7 +19,12 @@ def demonstrate_transaction():
     print("=" * 60)
     
     # 创建SQL处理器
-    processor = UnifiedSQLProcessor()
+    try:
+        processor = UnifiedSQLProcessor()
+        print("✅ SQL处理器创建成功")
+    except Exception as e:
+        print(f"❌ SQL处理器创建失败: {e}")
+        return
     
     # 1. 创建测试表
     print("\n1. 创建测试表...")

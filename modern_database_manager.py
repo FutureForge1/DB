@@ -1166,6 +1166,17 @@ CREATE TABLE authors (
         )
         self.perf_text.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
+        # 控制按钮 - 现代化布局
+        perf_buttons_frame = ttk.Frame(perf_stats_frame, style='Modern.TFrame')
+        perf_buttons_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Button(perf_buttons_frame, text="🔄 刷新", 
+                  command=self._refresh_performance, style='Info.TButton').pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Button(perf_buttons_frame, text="📊 详细统计", 
+                  command=self._show_detailed_stats, style='Modern.TButton').pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Button(perf_buttons_frame, text="🧹 清除统计", 
+                  command=self._clear_stats, style='Warning.TButton').pack(side=tk.LEFT)
+
     def _create_distributed_tab(self):
         """创建分布式功能标签页"""
         distributed_frame = ttk.Frame(self.notebook, style='Modern.TFrame')
@@ -1844,17 +1855,6 @@ CREATE TABLE authors (
             self.monitoring_text.delete(1.0, tk.END)
             self.monitoring_text.insert(tk.END, f"❌ 刷新监控信息失败: {str(e)}")
 
-        # 控制按钮 - 现代化布局
-        perf_buttons_frame = ttk.Frame(perf_stats_frame, style='Modern.TFrame')
-        perf_buttons_frame.pack(fill=tk.X)
-
-        ttk.Button(perf_buttons_frame, text="🔄 刷新", 
-                  command=self._refresh_performance, style='Info.TButton').pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Button(perf_buttons_frame, text="📊 详细统计", 
-                  command=self._show_detailed_stats, style='Modern.TButton').pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Button(perf_buttons_frame, text="🧹 清除统计", 
-                  command=self._clear_stats, style='Warning.TButton').pack(side=tk.LEFT)
-
     def _create_status_bar(self):
         """创建现代化状态栏"""
         # 状态栏容器
@@ -2059,20 +2059,58 @@ CREATE TABLE authors (
                                     self._update_info_display(f"  索引条目: {len(index_rows)}\n")
                                 else:
                                     self._update_info_display("  （无索引）\n")
+                                    # 为无索引情况也在结果数据区域显示
+                                    no_index_info = [{
+                                        '操作类型': 'SHOW查看',
+                                        '查询对象': '索引信息',
+                                        '执行结果': '该表无索引',
+                                        '执行时间': time.strftime('%H:%M:%S')
+                                    }]
+                                    self._display_query_results(no_index_info, "索引查询结果")
                                 handled = True
                             # 2) CREATE/DROP 等消息风格: [{'message': '...'}]
                             elif 'message' in results[0]:
+                                # 将消息转换为表格形式显示在结果数据区域
+                                message_results = []
                                 for r in results:
                                     msg = r.get('message') or r
                                     self._update_info_display(f"{msg}\n")
+                                    # 添加到结果数据区域
+                                    message_results.append({
+                                        '操作类型': self._get_operation_type(sql),
+                                        '执行结果': msg,
+                                        '执行时间': time.strftime('%H:%M:%S')
+                                    })
+                                if message_results:
+                                    self._display_query_results(message_results, "执行结果")
                                 handled = True
                             # 3) 旧风格: 带 operation/status
                             elif 'operation' in results[0]:
+                                # 将操作结果转换为表格形式显示在结果数据区域
+                                operation_results = []
                                 for result in results:
                                     if result.get('status') == 'success':
-                                        self._update_info_display(f"   {result.get('message', '操作成功')}\n")
+                                        msg = result.get('message', '操作成功')
+                                        self._update_info_display(f"   {msg}\n")
+                                        # 添加到结果数据区域
+                                        operation_results.append({
+                                            '操作类型': self._get_operation_type(sql),
+                                            '执行结果': msg,
+                                            '状态': '成功',
+                                            '执行时间': time.strftime('%H:%M:%S')
+                                        })
                                     else:
-                                        self._update_info_display(f"   {result.get('message', '操作失败')}\n")
+                                        msg = result.get('message', '操作失败')
+                                        self._update_info_display(f"   {msg}\n")
+                                        # 添加到结果数据区域
+                                        operation_results.append({
+                                            '操作类型': self._get_operation_type(sql),
+                                            '执行结果': msg,
+                                            '状态': '失败',
+                                            '执行时间': time.strftime('%H:%M:%S')
+                                        })
+                                if operation_results:
+                                    self._display_query_results(operation_results, "执行结果")
                                 handled = True
                         
                         if not handled:
@@ -2081,6 +2119,14 @@ CREATE TABLE authors (
                             self._update_info_display(f"  返回 {len(results)} 条记录\n")
                     else:
                         self._update_info_display("  执行成功，无返回结果\n")
+                        # 为无返回结果的成功操作也在结果数据区域显示信息
+                        no_result_info = [{
+                            '操作类型': self._get_operation_type(sql),
+                            '执行结果': '执行成功',
+                            '返回数据': '无',
+                            '执行时间': time.strftime('%H:%M:%S')
+                        }]
+                        self._display_query_results(no_result_info, "执行结果")
                 else:
                     formatted_error = self._format_error_message(error_msg)
                     self._update_info_display(f" SQL执行失败:\n{formatted_error}\n")
@@ -2151,6 +2197,34 @@ CREATE TABLE authors (
             self.root.after(0, lambda: self._update_status("查询执行完成"))
 
     # 旧的简化SQL处理方法已被删除，现在完全使用src/sql_processor.py中的真实SQL处理器
+
+    def _get_operation_type(self, sql: str) -> str:
+        """根据SQL语句判断操作类型"""
+        sql_upper = sql.upper().strip()
+        if sql_upper.startswith('SELECT'):
+            return 'SELECT查询'
+        elif sql_upper.startswith('INSERT'):
+            return 'INSERT插入'
+        elif sql_upper.startswith('UPDATE'):
+            return 'UPDATE更新'
+        elif sql_upper.startswith('DELETE'):
+            return 'DELETE删除'
+        elif sql_upper.startswith('CREATE'):
+            return 'CREATE创建'
+        elif sql_upper.startswith('DROP'):
+            return 'DROP删除'
+        elif sql_upper.startswith('ALTER'):
+            return 'ALTER修改'
+        elif sql_upper.startswith('BEGIN'):
+            return '事务开始'
+        elif sql_upper.startswith('COMMIT'):
+            return '事务提交'
+        elif sql_upper.startswith('ROLLBACK'):
+            return '事务回滚'
+        elif sql_upper.startswith('SHOW'):
+            return 'SHOW查看'
+        else:
+            return 'SQL操作'
 
     def _display_query_results(self, results: List[Dict[str, Any]], table_name: str):
         """显示查询结果"""
@@ -2846,7 +2920,7 @@ CREATE TABLE authors (
 
     def _create_table_dialog(self):
         """创建表对话框"""
-        dialog = CreateTableDialog(self.root, self.storage_engine)
+        dialog = CreateTableDialog(self.root, self.storage_engine, self)
         if dialog.result:
             self._refresh_tables()
 
@@ -2863,19 +2937,57 @@ CREATE TABLE authors (
             try:
                 if self.storage_engine.drop_table(table_name):
                     messagebox.showinfo("成功", f"表 '{table_name}' 已删除")
+                    # 在结果数据区域显示删除成功信息
+                    drop_result = [{
+                        '操作类型': 'DROP删除',
+                        '操作对象': f"表 '{table_name}'",
+                        '执行结果': '删除成功',
+                        '执行时间': time.strftime('%H:%M:%S')
+                    }]
+                    self._display_query_results(drop_result, "表操作结果")
                     self._refresh_tables()
                 else:
                     messagebox.showerror("错误", f"删除表 '{table_name}' 失败")
+                    # 在结果数据区域显示删除失败信息
+                    drop_result = [{
+                        '操作类型': 'DROP删除',
+                        '操作对象': f"表 '{table_name}'",
+                        '执行结果': '删除失败',
+                        '执行时间': time.strftime('%H:%M:%S')
+                    }]
+                    self._display_query_results(drop_result, "表操作结果")
             except Exception as e:
                 messagebox.showerror("错误", f"删除表时发生错误: {str(e)}")
+                # 在结果数据区域显示错误信息
+                error_result = [{
+                    '操作类型': 'DROP删除',
+                    '操作对象': f"表 '{table_name}'",
+                    '执行结果': f'错误: {str(e)}',
+                    '执行时间': time.strftime('%H:%M:%S')
+                }]
+                self._display_query_results(error_result, "表操作结果")
 
     # 性能监控相关方法
     def _refresh_performance(self):
         """刷新性能统计"""
-        self._refresh_storage_stats()  # 重用存储统计的逻辑
+        try:
+            self._refresh_storage_stats()  # 重用存储统计的逻辑
 
-        # 在性能标签页显示更详细的信息
-        if self.storage_engine:
+            # 在性能标签页显示更详细的信息
+            if not self.storage_engine:
+                # 如果存储引擎不存在，显示错误信息
+                if hasattr(self, 'perf_text'):
+                    self.perf_text.config(state=tk.NORMAL)
+                    self.perf_text.delete(1.0, tk.END)
+                    self.perf_text.insert(1.0, "❌ 存储引擎未初始化\n请检查数据库连接状态。")
+                    self.perf_text.config(state=tk.DISABLED)
+                return
+                
+            # 检查perf_text是否存在
+            if not hasattr(self, 'perf_text'):
+                print("警告: 性能监控文本区域未初始化")
+                return
+                
             stats = self.storage_engine.get_stats()
 
             self.perf_text.config(state=tk.NORMAL)
@@ -2944,6 +3056,18 @@ CREATE TABLE authors (
 
             self.perf_text.insert(1.0, perf_text)
             self.perf_text.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            print(f"性能监控刷新错误: {e}")
+            if hasattr(self, 'perf_text'):
+                try:
+                    self.perf_text.config(state=tk.NORMAL)
+                    self.perf_text.delete(1.0, tk.END)
+                    error_msg = f"❌ 性能监控数据获取失败\n\n错误信息: {str(e)}\n\n请尝试刷新或重启应用。"
+                    self.perf_text.insert(1.0, error_msg)
+                    self.perf_text.config(state=tk.DISABLED)
+                except:
+                    pass
 
     def _show_detailed_stats(self):
         """显示详细统计"""
@@ -3406,6 +3530,7 @@ CREATE TABLE authors (
         # 初始化显示
         self._refresh_tables()
         self._refresh_storage_stats()
+        self._refresh_performance()  # 初始化性能监控面板
 
         # 显示欢迎信息
         welcome_msg = """🎉 欢迎使用现代化数据库管理系统！
@@ -3455,9 +3580,10 @@ CREATE TABLE authors (
 class CreateTableDialog:
     """创建表对话框"""
 
-    def __init__(self, parent, storage_engine):
+    def __init__(self, parent, storage_engine, main_window=None):
         self.parent = parent
         self.storage_engine = storage_engine
+        self.main_window = main_window
         self.result = False
 
         self._create_dialog()
@@ -3588,12 +3714,41 @@ class CreateTableDialog:
         try:
             if self.storage_engine.create_table(table_name, columns):
                 messagebox.showinfo("成功", f"表 '{table_name}' 创建成功")
+                # 在主窗口的结果数据区域显示创建成功信息
+                if self.main_window and hasattr(self.main_window, '_display_query_results'):
+                    create_result = [{
+                        '操作类型': 'CREATE创建',
+                        '操作对象': f"表 '{table_name}'",
+                        '执行结果': '创建成功',
+                        '列数': len(columns),
+                        '执行时间': time.strftime('%H:%M:%S')
+                    }]
+                    self.main_window._display_query_results(create_result, "表操作结果")
+                
                 self.result = True
                 self.dialog.destroy()
             else:
                 messagebox.showerror("错误", f"创建表 '{table_name}' 失败")
+                # 显示失败信息
+                if self.main_window and hasattr(self.main_window, '_display_query_results'):
+                    create_result = [{
+                        '操作类型': 'CREATE创建',
+                        '操作对象': f"表 '{table_name}'",
+                        '执行结果': '创建失败',
+                        '执行时间': time.strftime('%H:%M:%S')
+                    }]
+                    self.main_window._display_query_results(create_result, "表操作结果")
         except Exception as e:
             messagebox.showerror("错误", f"创建表时发生错误: {str(e)}")
+            # 显示错误信息
+            if self.main_window and hasattr(self.main_window, '_display_query_results'):
+                error_result = [{
+                    '操作类型': 'CREATE创建',
+                    '操作对象': f"表 '{table_name}'",
+                    '执行结果': f'错误: {str(e)}',
+                    '执行时间': time.strftime('%H:%M:%S')
+                }]
+                self.main_window._display_query_results(error_result, "表操作结果")
 
     def _cancel(self):
         """取消"""

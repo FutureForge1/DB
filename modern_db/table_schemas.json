@@ -282,6 +282,40 @@
       ],
       "primary_key": "id",
       "created_time": "2025-09-16 15:23:44"
+    },
+    {
+      "table_name": "demo_users",
+      "columns": [
+        {
+          "name": "id",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": true,
+          "is_unique": false
+        },
+        {
+          "name": "name",
+          "column_type": "STRING",
+          "max_length": 50,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        },
+        {
+          "name": "age",
+          "column_type": "INTEGER",
+          "max_length": null,
+          "nullable": true,
+          "default_value": null,
+          "is_primary_key": false,
+          "is_unique": false
+        }
+      ],
+      "primary_key": "id",
+      "created_time": "2025-09-16 15:50:14"
     }
   ],
   "table_pages": {
@@ -317,6 +351,9 @@
     ],
     "accounts": [
       66
+    ],
+    "demo_users": [
+      67
     ]
   }
 }
